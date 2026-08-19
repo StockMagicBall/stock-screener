@@ -136,20 +136,28 @@ def simulate_portfolio(
     tickers: list,
     period: str = "3y",
     score_quantile: float = 0.8,
-    holding_days: int = 3,
+    max_holding_days: int = 20,
     cost_bps: float = 10.0,
     stop_loss_pct: float = 5.0,
+    trailing_stop_pct: float = 8.0,
+    trend_exit: bool = True,
     starting_capital: float = 10000.0,
     max_concurrent: int = 5,
 ) -> dict:
     """
-    Realistic portfolio backtest: fixed number of position 'slots' so
-    simultaneous signals across tickers share capital instead of each
-    getting an imaginary 100%. Each position exits early if it drops
-    stop_loss_pct below entry, otherwise exits at the planned holding period.
-    Set stop_loss_pct to None to disable the stop.
+    Swing-trade portfolio backtest. A fixed number of position 'slots' share
+    real capital (so simultaneous signals can't each claim 100%). Each
+    position is held as long as the trend holds, exiting on whichever
+    comes first:
+      - initial stop-loss (stop_loss_pct below entry)
+      - trailing stop (trailing_stop_pct below the highest price reached
+        since entry -- this is what lets winners run instead of forcing
+        an exit after a fixed number of days)
+      - trend reversal (price/MACD trend filter turns off, if trend_exit=True)
+      - max_holding_days safety cap, in case none of the above ever fires
     """
     ticker_data = {}
+    ticker_direction = {}
     candidates = []
 
     for t in tickers:
@@ -162,6 +170,8 @@ def simulate_portfolio(
         ind = compute_indicator_frame(df)
         score = compute_score_series(ind)
         direction = compute_direction(df)
+        ticker_direction[t] = direction
+
         valid = score.notna() & direction.notna()
         if not valid.any():
             continue
@@ -171,8 +181,7 @@ def simulate_portfolio(
         for signal_date in df.index[entry_signal]:
             pos = df.index.get_loc(signal_date)
             entry_idx = pos + 1
-            exit_idx = entry_idx + holding_days - 1
-            if exit_idx >= len(df):
+            if entry_idx >= len(df):
                 continue
             candidates.append(
                 {
@@ -180,7 +189,6 @@ def simulate_portfolio(
                     "signal_date": signal_date,
                     "entry_date": df.index[entry_idx],
                     "entry_idx": entry_idx,
-                    "planned_exit_idx": exit_idx,
                     "score": round(float(score.loc[signal_date]), 1),
                     "used": False,
                 }
@@ -207,11 +215,33 @@ def simulate_portfolio(
             return position_size * (close / pos["entry_price"])
         return position_size
 
+    def close_position(pos, exit_price, date, reason, days_held):
+        net_return = (exit_price / pos["entry_price"] - 1) - (cost_bps / 10000)
+        pnl = position_size * net_return
+        nonlocal cash
+        cash += position_size + pnl
+        closed_trades.append(
+            {
+                "ticker": pos["ticker"],
+                "signal_date": pos["signal_date"].date(),
+                "entry_date": pos["entry_date"].date(),
+                "exit_date": date.date(),
+                "days_held": days_held,
+                "entry_price": round(pos["entry_price"], 2),
+                "exit_price": round(float(exit_price), 2),
+                "score": pos["score"],
+                "net_return_pct": round(net_return * 100, 2),
+                "exit_reason": reason,
+                "win": bool(net_return > 0),
+            }
+        )
+
     for date in all_dates:
         # 1. process exits
         still_open = []
         for pos in open_positions:
             df = ticker_data[pos["ticker"]]
+            direction = ticker_direction[pos["ticker"]]
             if date not in df.index:
                 still_open.append(pos)
                 continue
@@ -221,30 +251,27 @@ def simulate_portfolio(
                 continue
 
             row = df.loc[date]
+            days_held = day_idx - pos["entry_idx"]
+            is_last_bar = day_idx == len(df) - 1
+
+            # update trailing peak using the day's high before checking stops
+            pos["peak_price"] = max(pos["peak_price"], row["high"])
+            trailing_stop_price = pos["peak_price"] * (1 - trailing_stop_pct / 100) if trailing_stop_pct else -1
+            effective_stop = max(pos["initial_stop_price"], trailing_stop_price)
+
             exit_price, reason = None, None
-            if stop_loss_pct is not None and row["low"] <= pos["stop_price"]:
-                exit_price, reason = pos["stop_price"], "stop_loss"
-            elif day_idx >= pos["planned_exit_idx"]:
-                exit_price, reason = row["close"], "time_exit"
+            if row["low"] <= effective_stop:
+                exit_price = effective_stop
+                reason = "trailing_stop" if effective_stop > pos["initial_stop_price"] else "stop_loss"
+            elif trend_exit and direction.loc[date] != "bullish":
+                exit_price, reason = row["close"], "trend_exit"
+            elif days_held >= max_holding_days:
+                exit_price, reason = row["close"], "time_cap"
+            elif is_last_bar:
+                exit_price, reason = row["close"], "data_end"
 
             if exit_price is not None:
-                net_return = (exit_price / pos["entry_price"] - 1) - (cost_bps / 10000)
-                pnl = position_size * net_return
-                cash += position_size + pnl
-                closed_trades.append(
-                    {
-                        "ticker": pos["ticker"],
-                        "signal_date": pos["signal_date"].date(),
-                        "entry_date": pos["entry_date"].date(),
-                        "exit_date": date.date(),
-                        "entry_price": round(pos["entry_price"], 2),
-                        "exit_price": round(float(exit_price), 2),
-                        "score": pos["score"],
-                        "net_return_pct": round(net_return * 100, 2),
-                        "exit_reason": reason,
-                        "win": bool(net_return > 0),
-                    }
-                )
+                close_position(pos, exit_price, date, reason, days_held)
             else:
                 still_open.append(pos)
         open_positions = still_open
@@ -260,15 +287,16 @@ def simulate_portfolio(
             df = ticker_data[c["ticker"]]
             entry_price = float(df["open"].iloc[c["entry_idx"]])
             cash -= position_size
+            initial_stop_price = entry_price * (1 - stop_loss_pct / 100) if stop_loss_pct else -1
             open_positions.append(
                 {
                     "ticker": c["ticker"],
                     "signal_date": c["signal_date"],
                     "entry_date": c["entry_date"],
                     "entry_idx": c["entry_idx"],
-                    "planned_exit_idx": c["planned_exit_idx"],
                     "entry_price": entry_price,
-                    "stop_price": entry_price * (1 - stop_loss_pct / 100) if stop_loss_pct else -1,
+                    "peak_price": entry_price,
+                    "initial_stop_price": initial_stop_price,
                     "score": c["score"],
                 }
             )
@@ -296,8 +324,9 @@ def simulate_portfolio(
             "avg_return_per_trade_pct": round(returns.mean() * 100, 2),
             "avg_win_pct": round(returns[wins].mean() * 100, 2) if wins.any() else 0.0,
             "avg_loss_pct": round(returns[~wins].mean() * 100, 2) if (~wins).any() else 0.0,
+            "avg_days_held": round(trades["days_held"].mean(), 1),
             "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else float("inf"),
-            "stopped_out_pct": round((trades["exit_reason"] == "stop_loss").mean() * 100, 1),
+            "stopped_out_pct": round((trades["exit_reason"].isin(["stop_loss", "trailing_stop"])).mean() * 100, 1),
             "final_equity": round(float(equity_df["equity"].iloc[-1]), 2),
             "total_return_pct": round((equity_df["equity"].iloc[-1] / starting_capital - 1) * 100, 1),
             "max_drawdown_pct": round(float(drawdown) * 100, 1),
