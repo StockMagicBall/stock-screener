@@ -7,6 +7,14 @@ on:
     # you may want to nudge this by an hour depending on the time of year.
     - cron: "30 21 * * 1-5"
   workflow_dispatch:  # lets you trigger it manually from the Actions tab to test
+    inputs:
+      test_mode:
+        description: "Send a test email immediately, ignoring signals"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write  # needed so this workflow can commit signal_log.csv back to the repo
 
 jobs:
   check-signals:
@@ -28,4 +36,18 @@ jobs:
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          TEST_MODE: ${{ github.event.inputs.test_mode }}
         run: python daily_alert.py
+
+      - name: Update live signal track record
+        if: ${{ github.event.inputs.test_mode != 'true' }}  # skip during delivery tests
+        run: python log_signals.py
+
+      - name: Commit updated track record
+        if: ${{ github.event.inputs.test_mode != 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add signal_log.csv
+          git diff --cached --quiet || git commit -m "Update signal track record [automated]"
+          git push
