@@ -145,6 +145,8 @@ def simulate_portfolio(
     trend_exit: bool = True,
     starting_capital: float = 10000.0,
     max_concurrent: int = 5,
+    require_confirmation: bool = True,
+    confirm_window_days: int = 3,
 ) -> dict:
     """
     Swing-trade portfolio backtest. A fixed number of position 'slots' share
@@ -157,6 +159,14 @@ def simulate_portfolio(
         an exit after a fixed number of days)
       - trend reversal (price/MACD trend filter turns off, if trend_exit=True)
       - max_holding_days safety cap, in case none of the above ever fires
+
+    ENTRY-TIMING CONFIRMATION (if require_confirmation=True): a raw signal
+    does not enter immediately. It waits up to confirm_window_days for price
+    to close above the signal day's high -- real follow-through, not just a
+    one-day flicker. If that never happens, the signal is dropped entirely
+    (no trade). This delays entries but filters out breakouts that
+    immediately fail. Entry then happens at the open of the day AFTER
+    confirmation, so this never looks ahead.
 
     Pass start (and optionally end) as "YYYY-MM-DD" to backtest a specific
     historical window (e.g. start="2022-01-01", end="2022-12-31") instead
@@ -185,8 +195,26 @@ def simulate_portfolio(
         entry_signal = valid & (score >= threshold) & (direction == "bullish")
 
         for signal_date in df.index[entry_signal]:
-            pos = df.index.get_loc(signal_date)
-            entry_idx = pos + 1
+            sig_pos = df.index.get_loc(signal_date)
+
+            if require_confirmation:
+                signal_high = df["high"].iloc[sig_pos]
+                confirmed_idx = None
+                for offset in range(1, confirm_window_days + 1):
+                    check_idx = sig_pos + offset
+                    if check_idx >= len(df):
+                        break
+                    if df["close"].iloc[check_idx] > signal_high:
+                        confirmed_idx = check_idx
+                        break
+                if confirmed_idx is None:
+                    continue  # never confirmed -- drop this signal, no trade
+                entry_idx = confirmed_idx + 1
+                days_to_confirm = confirmed_idx - sig_pos
+            else:
+                entry_idx = sig_pos + 1
+                days_to_confirm = 0
+
             if entry_idx >= len(df):
                 continue
             candidates.append(
@@ -196,6 +224,7 @@ def simulate_portfolio(
                     "entry_date": df.index[entry_idx],
                     "entry_idx": entry_idx,
                     "score": round(float(score.loc[signal_date]), 1),
+                    "days_to_confirm": days_to_confirm,
                     "used": False,
                 }
             )
@@ -232,6 +261,7 @@ def simulate_portfolio(
                 "signal_date": pos["signal_date"].date(),
                 "entry_date": pos["entry_date"].date(),
                 "exit_date": date.date(),
+                "days_to_confirm": pos["days_to_confirm"],
                 "days_held": days_held,
                 "entry_price": round(pos["entry_price"], 2),
                 "exit_price": round(float(exit_price), 2),
@@ -304,6 +334,7 @@ def simulate_portfolio(
                     "peak_price": entry_price,
                     "initial_stop_price": initial_stop_price,
                     "score": c["score"],
+                    "days_to_confirm": c["days_to_confirm"],
                 }
             )
 
@@ -388,12 +419,25 @@ def simulate_buy_and_hold(
 def get_todays_signals(
     tickers: list, period: str = "1y", score_quantile: float = 0.8,
     include_context: bool = False,
+    require_confirmation: bool = True, confirm_window_days: int = 3,
 ) -> pd.DataFrame:
     """
     What the strategy would flag RIGHT NOW, for each ticker's most recent day.
+
+    With require_confirmation=True (matches the backtest logic), a raw
+    score+trend signal must show real follow-through -- a close above the
+    signal day's high, within confirm_window_days -- before it counts as an
+    actionable setup. Three states:
+      - "LONG SETUP (confirmed)": raw signal fired recently AND price has
+        already closed above that signal day's high -- actionable now.
+      - "AWAITING CONFIRMATION": raw signal fired recently but hasn't shown
+        follow-through yet -- still inside its confirmation window, don't
+        act on it yet.
+      - "no signal": nothing meeting the criteria currently.
+
     If include_context=True, also pulls news sentiment and institutional
-    ownership for signal-worthy tickers -- these are DISPLAY CONTEXT ONLY,
-    not part of the entry criteria, since sentiment is noisy/lagging and
+    ownership for confirmed setups -- these are DISPLAY CONTEXT ONLY, not
+    part of the entry criteria, since sentiment is noisy/lagging and
     institutional data is quarterly and stale.
     """
     from swing_screener import get_news_sentiment, get_institutional_context
@@ -411,11 +455,42 @@ def get_todays_signals(
 
         valid = score.notna() & direction.notna()
         threshold = score[valid].quantile(score_quantile)
+        raw_signal = valid & (score >= threshold) & (direction == "bullish")
 
-        last = -1
+        last = len(df) - 1
         s = score.iloc[last]
         d = direction.iloc[last]
-        signal = "LONG SETUP" if (pd.notna(s) and s >= threshold and d == "bullish") else "no signal"
+
+        signal = "no signal"
+        days_to_confirm = None
+
+        if require_confirmation:
+            # scan all raw signals within the lookback window -- if ANY of them
+            # has since confirmed, that's an actionable setup; otherwise if any
+            # raw signal exists unconfirmed, it's still awaiting follow-through
+            lookback_start = max(0, last - confirm_window_days)
+            found_confirmed, found_awaiting = False, False
+            for sig_pos in range(lookback_start, last + 1):
+                if not raw_signal.iloc[sig_pos]:
+                    continue
+                signal_high = df["high"].iloc[sig_pos]
+                confirmed_this = False
+                for offset in range(1, min(confirm_window_days, last - sig_pos) + 1):
+                    if df["close"].iloc[sig_pos + offset] > signal_high:
+                        confirmed_this = True
+                        days_to_confirm = offset
+                        break
+                if confirmed_this:
+                    found_confirmed = True
+                else:
+                    found_awaiting = True
+            signal = (
+                "LONG SETUP (confirmed)" if found_confirmed
+                else "AWAITING CONFIRMATION" if found_awaiting
+                else "no signal"
+            )
+        else:
+            signal = "LONG SETUP" if (pd.notna(s) and s >= threshold and d == "bullish") else "no signal"
 
         row = {
             "ticker": t,
@@ -425,8 +500,10 @@ def get_todays_signals(
             "direction": d,
             "signal": signal,
         }
+        if require_confirmation:
+            row["days_to_confirm"] = days_to_confirm
 
-        if include_context and signal == "LONG SETUP":
+        if include_context and signal in ("LONG SETUP", "LONG SETUP (confirmed)"):
             news = get_news_sentiment(t)
             inst = get_institutional_context(t)
             row["news_sentiment"] = news.get("avg_sentiment")
