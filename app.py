@@ -651,14 +651,15 @@ with tab_journal:
                 ts_col.caption(f"Live prices as of {st.session_state['j_price_fetched_at']} (local time)")
 
             display_df = open_trades.drop(columns=["exit_date", "exit_price", "realized_pnl", "realized_pnl_pct"]).copy()
-            current_prices, market_states, market_values, unrealized_pnls, unrealized_pcts = [], [], [], [], []
+            regular_prices, extended_prices, extended_labels = [], [], []
+            market_values, unrealized_pnls, unrealized_pcts = [], [], []
             fetch_errors = {}
             for _, row in display_df.iterrows():
                 info = price_cache.get(row["ticker"], {})
-                price = info.get("price")
-                state = info.get("market_state")
-                current_prices.append(price)
-                market_states.append(state)
+                price = info.get("price")  # most-current available, used for P&L
+                regular_prices.append(info.get("regular_price"))
+                extended_prices.append(info.get("extended_price"))
+                extended_labels.append(info.get("extended_label"))
                 if price is not None:
                     mv = price * float(row["units"])
                     pnl = mv - float(row["total_cost"])
@@ -673,8 +674,9 @@ with tab_journal:
                     if info.get("error"):
                         fetch_errors[row["ticker"]] = info["error"]
 
-            display_df["current_price"] = current_prices
-            display_df["market_state"] = market_states
+            display_df["regular_price"] = regular_prices
+            display_df["extended_price"] = extended_prices
+            display_df["extended_session"] = extended_labels
             display_df["market_value"] = market_values
             display_df["unrealized_pnl"] = unrealized_pnls
             display_df["unrealized_pnl_pct"] = unrealized_pcts
@@ -689,9 +691,10 @@ with tab_journal:
                 style_pnl(display_df, "unrealized_pnl_pct"), use_container_width=True, hide_index=True,
             )
             st.caption(
-                "'market_state' shows what kind of price this is: REGULAR (normal trading hours), "
-                "PRE/POST (pre-market or after-hours -- thinner volume, less reliable), CRYPTO "
-                "(trades continuously), or 'CLOSED (last close)' if live pricing wasn't available. "
+                "'regular_price' is the standard trading-session price (or last close if markets "
+                "are shut, or the live 24h price for crypto). 'extended_price' only fills in during "
+                "actual pre-market/after-hours windows -- blank the rest of the time, which is "
+                "correct, not a bug. Market value and P&L use whichever price is most current. "
                 "Click Refresh to update -- prices don't auto-update on their own."
             )
 
