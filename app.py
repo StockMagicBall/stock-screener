@@ -70,11 +70,11 @@ with tab_screen:
 # Tab 2: strategy backtest (movement score + trend direction -> simulated trades)
 # ---------------------------------------------------------------------------
 with tab_strategy:
-    st.subheader("Backtest the directional strategy")
+    st.subheader("Backtest the swing-trading strategy")
     st.caption(
         "Portfolio-level simulation: a fixed number of position slots share a real "
-        "capital pool (so simultaneous signals can't each claim 100%), and every "
-        "position exits early if it drops past your stop-loss."
+        "capital pool. Positions ride the trend using a trailing stop — instead of "
+        "exiting on a fixed day count — and close out when the trend actually reverses."
     )
 
     col1, col2, col3 = st.columns(3)
@@ -86,14 +86,16 @@ with tab_strategy:
             key="strategy_tickers",
         )
         strat_period = st.selectbox("History window", ["1y", "2y", "3y", "5y"], index=2, key="strategy_period")
-    with col2:
-        holding_days = st.slider("Max holding period (trading days)", 1, 10, 3, key="holding_days")
         score_quantile = st.slider("Score threshold (percentile)", 0.5, 0.95, 0.8, step=0.05, key="score_q")
-        cost_bps = st.number_input("Round-trip cost (bps)", min_value=0.0, value=10.0, step=1.0, key="cost_bps")
+    with col2:
+        stop_loss_pct = st.slider("Initial stop-loss (%)", 1.0, 15.0, 5.0, step=0.5, key="stop_loss")
+        trailing_stop_pct = st.slider("Trailing stop (%)", 2.0, 20.0, 8.0, step=0.5, key="trailing_stop")
+        max_holding_days = st.slider("Max holding days (safety cap)", 5, 60, 20, key="max_holding")
+        trend_exit = st.checkbox("Exit early if trend reverses", value=True, key="trend_exit")
     with col3:
-        stop_loss_pct = st.slider("Stop-loss (%)", 1.0, 15.0, 5.0, step=0.5, key="stop_loss")
         max_concurrent = st.slider("Max concurrent positions", 1, 10, 5, key="max_concurrent")
         starting_capital = st.number_input("Starting capital ($)", min_value=1000, value=10000, step=1000, key="capital")
+        cost_bps = st.number_input("Round-trip cost (bps)", min_value=0.0, value=10.0, step=1.0, key="cost_bps")
 
     if st.button("Run Strategy Backtest", type="primary", key="run_strategy"):
         raw = strat_tickers_input.replace(",", "\n")
@@ -102,8 +104,9 @@ with tab_strategy:
         with st.spinner("Simulating portfolio..."):
             result = simulate_portfolio(
                 tickers, period=strat_period, score_quantile=score_quantile,
-                holding_days=holding_days, cost_bps=cost_bps,
-                stop_loss_pct=stop_loss_pct, starting_capital=starting_capital,
+                max_holding_days=max_holding_days, cost_bps=cost_bps,
+                stop_loss_pct=stop_loss_pct, trailing_stop_pct=trailing_stop_pct,
+                trend_exit=trend_exit, starting_capital=starting_capital,
                 max_concurrent=max_concurrent,
             )
 
@@ -122,7 +125,7 @@ with tab_strategy:
             cols2 = st.columns(4)
             cols2[0].metric("Total return", f"{summary['total_return_pct']}%")
             cols2[1].metric("Final equity", f"${summary['final_equity']:,.0f}")
-            cols2[2].metric("Stopped out", f"{summary['stopped_out_pct']}% of trades")
+            cols2[2].metric("Avg days held", summary["avg_days_held"])
             cols2[3].metric("Skipped (no free slot)", summary["trades_skipped_capacity"])
 
             if summary["profit_factor"] > 2.5:
@@ -132,7 +135,12 @@ with tab_strategy:
                 )
 
             st.line_chart(equity_df.set_index("date")["equity"], height=250)
-            st.caption("Real portfolio equity curve — capital shared across concurrent positions, stop-losses applied.")
+            st.caption("Real portfolio equity curve — capital shared across concurrent positions.")
+
+            exit_counts = trades["exit_reason"].value_counts()
+            st.caption(
+                "Exit reasons: " + ", ".join(f"{v} {k}" for k, v in exit_counts.items())
+            )
 
             st.dataframe(trades, use_container_width=True, hide_index=True)
             csv = trades.to_csv(index=False).encode("utf-8")
