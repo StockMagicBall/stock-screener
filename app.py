@@ -11,7 +11,91 @@ import pandas as pd
 from swing_screener import run_screen
 from strategy import simulate_portfolio, simulate_buy_and_hold, get_todays_signals
 
-st.set_page_config(page_title="Swing Screener", layout="wide")
+st.set_page_config(page_title="Swing Screener", page_icon="📈", layout="wide")
+
+# ---------------------------------------------------------------------------
+# Theme: trading-terminal aesthetic -- dark navy, monospace data, amber signature
+# ---------------------------------------------------------------------------
+TICKER_TAPE = ["AAPL", "MSFT", "NVDA", "TSLA", "AMD", "AMZN", "GOOGL", "META", "NFLX", "AVGO"]
+
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+    html, body, [class*="css"] { font-family: 'Space Grotesk', sans-serif; }
+    .stApp { background-color: #0A0E14; }
+
+    /* Headers */
+    h1, h2, h3 { font-family: 'Space Grotesk', sans-serif !important; letter-spacing: -0.02em; }
+    h1 {
+        background: linear-gradient(90deg, #F0A93A 0%, #FFD98A 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 700 !important;
+    }
+
+    /* Numbers everywhere: monospace, like a real terminal */
+    [data-testid="stMetricValue"], .stDataFrame, code {
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+
+    /* Metric cards */
+    [data-testid="stMetric"] {
+        background: linear-gradient(155deg, #121822 0%, #0D1219 100%);
+        border: 1px solid #212B38;
+        border-radius: 10px;
+        padding: 14px 16px;
+    }
+    [data-testid="stMetricLabel"] { color: #6B7889 !important; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid #212B38; }
+    .stTabs [data-baseweb="tab"] {
+        font-family: 'Space Grotesk', sans-serif; font-weight: 500; color: #6B7889;
+        padding: 10px 18px;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #F0A93A !important; border-bottom: 2px solid #F0A93A !important;
+    }
+
+    /* Buttons */
+    .stButton>button {
+        background: linear-gradient(90deg, #F0A93A, #E0922B);
+        color: #0A0E14; font-weight: 700; border: none; border-radius: 8px;
+        transition: box-shadow 0.2s ease, transform 0.2s ease;
+    }
+    .stButton>button:hover {
+        box-shadow: 0 0 16px rgba(240, 169, 58, 0.45); transform: translateY(-1px);
+    }
+
+    /* Ticker tape -- signature element */
+    .ticker-tape-wrap {
+        overflow: hidden; white-space: nowrap; border-top: 1px solid #212B38;
+        border-bottom: 1px solid #212B38; background: #0D1219; padding: 8px 0; margin-bottom: 1.2rem;
+    }
+    .ticker-tape {
+        display: inline-block; padding-left: 100%;
+        animation: ticker-scroll 32s linear infinite;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: #6B7889;
+    }
+    .ticker-tape span { margin-right: 2.5rem; }
+    .ticker-tape .dot { color: #2FD9A8; margin-right: 4px; }
+    @keyframes ticker-scroll {
+        0%   { transform: translateX(0); }
+        100% { transform: translateX(-100%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .ticker-tape { animation: none; padding-left: 0; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+_tape_html = "".join(f'<span><span class="dot">●</span>{t}</span>' for t in TICKER_TAPE * 3)
+st.markdown(f'<div class="ticker-tape-wrap"><div class="ticker-tape">{_tape_html}</div></div>', unsafe_allow_html=True)
+
 st.title("📈 Swing / Day-Trade Screener")
 st.caption(
     "Educational tool, not financial advice. The movement score flags unusual "
@@ -19,6 +103,26 @@ st.caption(
     "it as real trades. No system can guarantee winning trades — treat this as a "
     "hypothesis-testing tool, and paper-trade before risking real money."
 )
+
+
+def style_pnl(df: pd.DataFrame, pct_col: str = "net_return_pct"):
+    """Color-code a returns column green/coral, terminal-style."""
+    def _color(val):
+        if pd.isna(val):
+            return ""
+        color = "#2FD9A8" if val > 0 else ("#FF5C6C" if val < 0 else "#6B7889")
+        return f"color: {color}; font-weight: 600;"
+    return df.style.map(_color, subset=[pct_col]) if pct_col in df.columns else df
+
+
+def style_signal(df: pd.DataFrame, col: str = "signal"):
+    """Highlight rows that meet the entry criteria, terminal-style."""
+    def _row(row):
+        if col in row and row[col] == "LONG SETUP":
+            return ["background-color: rgba(240, 169, 58, 0.12); font-weight: 600;"] * len(row)
+        return [""] * len(row)
+    return df.style.apply(_row, axis=1) if col in df.columns else df
+
 
 tab_screen, tab_strategy, tab_today = st.tabs(
     ["🔍 Screener", "🧪 Strategy Backtest", "🎯 Today's Signals"]
@@ -156,7 +260,7 @@ with tab_strategy:
                 "Exit reasons: " + ", ".join(f"{v} {k}" for k, v in exit_counts.items())
             )
 
-            st.dataframe(trades, use_container_width=True, hide_index=True)
+            st.dataframe(style_pnl(trades, "net_return_pct"), use_container_width=True, hide_index=True)
             csv = trades.to_csv(index=False).encode("utf-8")
             st.download_button("Download trade log as CSV", data=csv, file_name="strategy_trades.csv", mime="text/csv")
 
@@ -257,7 +361,7 @@ with tab_today:
             else:
                 st.info("No tickers currently meet the strategy's entry criteria — that's normal, and better than false positives.")
 
-            st.dataframe(signals, use_container_width=True, hide_index=True)
+            st.dataframe(style_signal(signals, "signal"), use_container_width=True, hide_index=True)
             st.caption(
                 "A 'LONG SETUP' here means: movement score above your threshold AND price "
                 "trending up (above 50-day average, MACD bullish) as of the most recent close. "
