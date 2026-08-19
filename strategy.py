@@ -306,6 +306,47 @@ def simulate_portfolio(
     return {"trades": trades, "equity_curve": equity_df, "summary": summary, "skipped": skipped}
 
 
+def simulate_buy_and_hold(tickers: list, period: str = "3y", starting_capital: float = 10000.0) -> dict:
+    """
+    Equal-weight buy-and-hold benchmark: split starting_capital evenly across
+    tickers on day 1, hold to the end, no trading. This is the baseline any
+    active strategy needs to beat to justify its extra complexity and risk.
+    """
+    tickers = [t.strip().upper() for t in tickers]
+    per_ticker_capital = starting_capital / len(tickers)
+
+    value_series = {}
+    for t in tickers:
+        df = fetch_history(t, period=period)
+        if df is None or len(df) < 2:
+            continue
+        shares = per_ticker_capital / df["close"].iloc[0]
+        value_series[t] = df["close"] * shares
+
+    if not value_series:
+        return {"equity_curve": pd.DataFrame(), "summary": {}}
+
+    combined = pd.concat(value_series.values(), axis=1).sort_index()
+    combined = combined.ffill().dropna()
+    equity = combined.sum(axis=1)
+
+    running_max = equity.cummax()
+    drawdown = (equity / running_max - 1).min()
+    years = (equity.index[-1] - equity.index[0]).days / 365.25
+    total_return = equity.iloc[-1] / equity.iloc[0] - 1
+    cagr = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0.0
+
+    summary = {
+        "final_equity": round(float(equity.iloc[-1]), 2),
+        "total_return_pct": round(total_return * 100, 1),
+        "annualized_return_pct": round(cagr * 100, 1),
+        "max_drawdown_pct": round(float(drawdown) * 100, 1),
+    }
+    equity_df = equity.reset_index()
+    equity_df.columns = ["date", "equity"]
+    return {"equity_curve": equity_df, "summary": summary}
+
+
 def get_todays_signals(tickers: list, period: str = "1y", score_quantile: float = 0.8) -> pd.DataFrame:
     """What the strategy would flag RIGHT NOW, for each ticker's most recent day."""
     rows = []
