@@ -85,7 +85,18 @@ with tab_strategy:
             height=180,
             key="strategy_tickers",
         )
-        strat_period = st.selectbox("History window", ["1y", "2y", "3y", "5y"], index=2, key="strategy_period")
+        date_mode = st.radio(
+            "Time window", ["Recent (rolling)", "Custom date range"], key="date_mode", horizontal=True
+        )
+        if date_mode == "Recent (rolling)":
+            strat_period = st.selectbox("History window", ["1y", "2y", "3y", "5y"], index=2, key="strategy_period")
+            strat_start, strat_end = None, None
+        else:
+            strat_period = "3y"
+            dcol1, dcol2 = st.columns(2)
+            strat_start = dcol1.date_input("Start date", value=pd.Timestamp("2022-01-01"), key="strat_start")
+            strat_end = dcol2.date_input("End date", value=pd.Timestamp("2022-12-31"), key="strat_end")
+            st.caption("Tip: 2022 was a rough year for tech stocks — a good stress test for whether this strategy earns its keep when buy-and-hold doesn't.")
         score_quantile = st.slider("Score threshold (percentile)", 0.5, 0.95, 0.8, step=0.05, key="score_q")
     with col2:
         stop_loss_pct = st.slider("Initial stop-loss (%)", 1.0, 15.0, 5.0, step=0.5, key="stop_loss")
@@ -103,7 +114,10 @@ with tab_strategy:
 
         with st.spinner("Simulating portfolio..."):
             result = simulate_portfolio(
-                tickers, period=strat_period, score_quantile=score_quantile,
+                tickers, period=strat_period,
+                start=str(strat_start) if strat_start else None,
+                end=str(strat_end) if strat_end else None,
+                score_quantile=score_quantile,
                 max_holding_days=max_holding_days, cost_bps=cost_bps,
                 stop_loss_pct=stop_loss_pct, trailing_stop_pct=trailing_stop_pct,
                 trend_exit=trend_exit, starting_capital=starting_capital,
@@ -159,7 +173,12 @@ with tab_strategy:
                 "risk actually beat just buying and holding the same tickers?"
             )
             with st.spinner("Computing buy-and-hold benchmark..."):
-                bh = simulate_buy_and_hold(tickers, period=strat_period, starting_capital=starting_capital)
+                bh = simulate_buy_and_hold(
+                    tickers, period=strat_period,
+                    start=str(strat_start) if strat_start else None,
+                    end=str(strat_end) if strat_end else None,
+                    starting_capital=starting_capital,
+                )
 
             if bh["summary"]:
                 bh_summary = bh["summary"]
