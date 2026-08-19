@@ -39,6 +39,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add intraday_alerts_today.csv
-          git diff --cached --quiet || git commit -m "Update intraday alert log [automated]"
-          git push
+          if [ -f intraday_alerts_today.csv ]; then
+            git add intraday_alerts_today.csv
+            git diff --cached --quiet || git commit -m "Update intraday alert log [automated]"
+            git push
+          else
+            echo "No dedup log file yet (no movers found this run) -- nothing to commit."
+          fi
