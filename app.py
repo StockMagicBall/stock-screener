@@ -8,7 +8,7 @@ Run with:
 import streamlit as st
 import pandas as pd
 
-from swing_screener import run_screen
+from swing_screener import run_screen, get_current_price
 from strategy import simulate_portfolio, simulate_buy_and_hold, get_todays_signals
 import journal_store
 
@@ -635,8 +635,56 @@ with tab_journal:
 
         if not open_trades.empty:
             st.markdown("**Open positions**")
-            st.dataframe(open_trades.drop(columns=["exit_date", "exit_price", "realized_pnl", "realized_pnl_pct"]),
-                         use_container_width=True, hide_index=True)
+
+            refresh_col, ts_col = st.columns([1, 3])
+            do_refresh = refresh_col.button("🔄 Refresh live prices", key="j_refresh_prices")
+            if do_refresh or "j_price_cache" not in st.session_state:
+                cache = {}
+                with st.spinner("Fetching current prices..."):
+                    for tkr in open_trades["ticker"].unique():
+                        cache[tkr] = get_current_price(tkr)
+                st.session_state["j_price_cache"] = cache
+                st.session_state["j_price_fetched_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            price_cache = st.session_state.get("j_price_cache", {})
+            if "j_price_fetched_at" in st.session_state:
+                ts_col.caption(f"Live prices as of {st.session_state['j_price_fetched_at']} (local time)")
+
+            display_df = open_trades.drop(columns=["exit_date", "exit_price", "realized_pnl", "realized_pnl_pct"]).copy()
+            current_prices, market_states, market_values, unrealized_pnls, unrealized_pcts = [], [], [], [], []
+            for _, row in display_df.iterrows():
+                info = price_cache.get(row["ticker"], {})
+                price = info.get("price")
+                state = info.get("market_state")
+                current_prices.append(price)
+                market_states.append(state)
+                if price is not None:
+                    mv = price * float(row["units"])
+                    pnl = mv - float(row["total_cost"])
+                    pnl_pct = (price / float(row["entry_price"]) - 1) * 100
+                    market_values.append(round(mv, 2))
+                    unrealized_pnls.append(round(pnl, 2))
+                    unrealized_pcts.append(round(pnl_pct, 2))
+                else:
+                    market_values.append(None)
+                    unrealized_pnls.append(None)
+                    unrealized_pcts.append(None)
+
+            display_df["current_price"] = current_prices
+            display_df["market_state"] = market_states
+            display_df["market_value"] = market_values
+            display_df["unrealized_pnl"] = unrealized_pnls
+            display_df["unrealized_pnl_pct"] = unrealized_pcts
+
+            st.dataframe(
+                style_pnl(display_df, "unrealized_pnl_pct"), use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                "'market_state' shows what kind of price this is: REGULAR (normal trading hours), "
+                "PRE/POST (pre-market or after-hours -- thinner volume, less reliable), CRYPTO "
+                "(trades continuously), or 'CLOSED (last close)' if live pricing wasn't available. "
+                "Click Refresh to update -- prices don't auto-update on their own."
+            )
 
             with st.expander("✅ Close a position"):
                 open_labels = [f"{r['ticker']} ({r['entry_date']}, {r['units']} units)" for _, r in open_trades.iterrows()]
