@@ -14,6 +14,7 @@ Optional environment variables (have sensible defaults if not set):
     TICKERS             -- comma-separated, defaults to the app's default list
     SCORE_QUANTILE      -- default 0.8
     CONFIRM_WINDOW_DAYS -- default 3
+    WATCH_NEAR_PCT      -- default 15 (how close to threshold counts as "watch")
     SMTP_SERVER         -- default smtp.gmail.com
     SMTP_PORT           -- default 587
 
@@ -28,7 +29,7 @@ from email.mime.text import MIMEText
 
 from strategy import get_todays_signals
 
-DEFAULT_TICKERS = "AAPL,MSFT,NVDA,TSLA,AMD,AMZN,GOOGL,META,NFLX,AVGO"
+DEFAULT_TICKERS = "AAPL,MSFT,NVDA,TSLA,AMD,AMZN,GOOGL,META,NFLX,AVGO,AMC,BYND,GME,GPRO,^HSI,SPY,IWM,PDD,JD,TSLL,BULL,RKT,ENPH,^VIX,INTC,DOGE-USD,BABA,PYPL,BTC-USD,DJT,HOOD,ROBN,ETSY,GOOG,NKE,SOFI,COIN,BIDU,UBER,FUBO,SHOP,ARKG,KOSS,NIO,SMCI,BB,MU,DIS,DELL,PLTR,BRK-A,LULU,ROKU,ABNB,UVXY,AI"
 
 
 def build_email_body(confirmed_df, awaiting_df) -> str:
@@ -53,6 +54,34 @@ def build_email_body(confirmed_df, awaiting_df) -> str:
     return "\n".join(lines)
 
 
+def build_watch_email_body(awaiting_df, near_threshold_df) -> str:
+    lines = []
+    lines.append(
+        "Nothing is actionable yet -- this is an early heads-up, not a buy signal.\n"
+    )
+
+    if not awaiting_df.empty:
+        lines.append("Awaiting confirmation (a raw signal fired, watching for follow-through):\n")
+        for _, row in awaiting_df.iterrows():
+            lines.append(f"  {row['ticker']}  |  close: ${row['close']}  |  score: {row['score']}")
+        lines.append("")
+
+    if not near_threshold_df.empty:
+        lines.append("Near threshold (approaching a raw signal, trend already bullish):\n")
+        for _, row in near_threshold_df.iterrows():
+            lines.append(
+                f"  {row['ticker']}  |  close: ${row['close']}  |  score: {row['score']} "
+                f"(threshold: {row['score_threshold']})"
+            )
+        lines.append("")
+
+    lines.append(
+        "---\nThis is a watch-list alert, not a trade signal. Nothing here has confirmed "
+        "yet -- treat it as 'worth checking on,' not 'time to act.'"
+    )
+    return "\n".join(lines)
+
+
 def send_email(subject: str, body: str) -> None:
     email_from = os.environ["EMAIL_FROM"]
     email_password = os.environ["EMAIL_PASSWORD"]
@@ -72,14 +101,34 @@ def send_email(subject: str, body: str) -> None:
 
 
 def main():
+    if os.environ.get("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        print("TEST_MODE enabled -- sending a delivery-confirmation email regardless of signals.", file=sys.stderr)
+        try:
+            send_email(
+                "[Swing Screener] Test alert -- delivery working",
+                "This is a test email to confirm the Daily Signal Check workflow can "
+                "successfully send you email. If you're reading this, delivery works.\n\n"
+                "Real alerts will look like this but list actual confirmed LONG SETUP tickers.",
+            )
+            print("Test email sent successfully.", file=sys.stderr)
+        except KeyError as e:
+            print(f"Missing required environment variable: {e}. Set EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO.", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Failed to send test email: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+
     tickers = [t.strip().upper() for t in os.environ.get("TICKERS", DEFAULT_TICKERS).split(",") if t.strip()]
     score_quantile = float(os.environ.get("SCORE_QUANTILE", "0.8"))
     confirm_window_days = int(os.environ.get("CONFIRM_WINDOW_DAYS", "3"))
+    watch_near_pct = float(os.environ.get("WATCH_NEAR_PCT", "15"))
 
     print(f"Checking {len(tickers)} tickers for confirmed signals...", file=sys.stderr)
     signals = get_todays_signals(
         tickers, score_quantile=score_quantile,
         require_confirmation=True, confirm_window_days=confirm_window_days,
+        watch_near_pct=watch_near_pct,
     )
 
     if signals.empty:
@@ -88,25 +137,46 @@ def main():
 
     confirmed = signals[signals["signal"] == "LONG SETUP (confirmed)"]
     awaiting = signals[signals["signal"] == "AWAITING CONFIRMATION"]
+    near_threshold = signals[signals["signal"] == "WATCH (near threshold)"]
 
-    print(f"Confirmed: {len(confirmed)}, Awaiting: {len(awaiting)}", file=sys.stderr)
+    print(
+        f"Confirmed: {len(confirmed)}, Awaiting: {len(awaiting)}, Near threshold: {len(near_threshold)}",
+        file=sys.stderr,
+    )
 
-    if confirmed.empty:
-        print("No confirmed signals -- no email sent.", file=sys.stderr)
-        return
+    # Confirmed buy signals -- the main alert, highest priority
+    if not confirmed.empty:
+        subject = f"[Swing Screener] {len(confirmed)} confirmed signal(s): " + ", ".join(confirmed["ticker"])
+        body = build_email_body(confirmed, awaiting)
+        try:
+            send_email(subject, body)
+            print("Confirmed-signal email sent successfully.", file=sys.stderr)
+        except KeyError as e:
+            print(f"Missing required environment variable: {e}. Set EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO.", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Failed to send confirmed-signal email: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("No confirmed signals -- no buy-alert email sent.", file=sys.stderr)
 
-    subject = f"[Swing Screener] {len(confirmed)} confirmed signal(s): " + ", ".join(confirmed["ticker"])
-    body = build_email_body(confirmed, awaiting)
-
-    try:
-        send_email(subject, body)
-        print("Email sent successfully.", file=sys.stderr)
-    except KeyError as e:
-        print(f"Missing required environment variable: {e}. Set EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO.", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Failed to send email: {e}", file=sys.stderr)
-        sys.exit(1)
+    # High-watch alert -- separate, lower-urgency trigger for setups getting close
+    watch_count = len(awaiting) + len(near_threshold)
+    if watch_count > 0:
+        watch_tickers = list(awaiting["ticker"]) + list(near_threshold["ticker"])
+        subject = f"[Swing Screener] High Watch: {watch_count} ticker(s) getting close: " + ", ".join(watch_tickers)
+        body = build_watch_email_body(awaiting, near_threshold)
+        try:
+            send_email(subject, body)
+            print("High-watch email sent successfully.", file=sys.stderr)
+        except KeyError as e:
+            print(f"Missing required environment variable: {e}. Set EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO.", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Failed to send high-watch email: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("Nothing near threshold -- no watch email sent.", file=sys.stderr)
 
 
 if __name__ == "__main__":
