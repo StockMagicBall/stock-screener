@@ -1,1 +1,44 @@
-daily_signal_check.yml
+name: Intraday Movement Check
+
+on:
+  schedule:
+    # Every 15 minutes, 13:00-21:59 UTC, weekdays. This window covers US market
+    # hours (9:30am-4:00pm ET) plus a buffer on both sides for daylight saving --
+    # GitHub cron doesn't adjust for DST, so the script's own is_market_open()
+    # check (via SPY's actual market state) is what really gates whether
+    # anything happens. Outside real market hours, this is a fast no-op.
+    - cron: "*/15 13-21 * * 1-5"
+  workflow_dispatch:  # lets you trigger it manually from the Actions tab to test
+
+permissions:
+  contents: write  # needed to commit intraday_alerts_today.csv back to the repo
+
+jobs:
+  intraday-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run intraday check
+        env:
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python intraday_check.py
+
+      - name: Commit dedup log if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add intraday_alerts_today.csv
+          git diff --cached --quiet || git commit -m "Update intraday alert log [automated]"
+          git push
