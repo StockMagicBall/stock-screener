@@ -1,0 +1,2 @@
+ticker,entry_date,entry_price,units,total_cost,stop_loss,sell_trigger,status,exit_date,exit_price,realized_pnl,realized_pnl_pct,notes
+TSLL,2026-08-19,8.2282,2765,22750.97,,,open,,,,,test
