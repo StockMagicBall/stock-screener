@@ -10,6 +10,7 @@ import pandas as pd
 
 from swing_screener import run_screen
 from strategy import simulate_portfolio, simulate_buy_and_hold, get_todays_signals
+import journal_store
 
 st.set_page_config(page_title="Swing Screener", page_icon="📈", layout="wide")
 
@@ -156,8 +157,8 @@ def style_signal(df: pd.DataFrame, col: str = "signal"):
     return df.style.apply(_row, axis=1) if col in df.columns else df
 
 
-tab_screen, tab_strategy, tab_today, tab_track, tab_size = st.tabs(
-    ["🔍 Screener", "🧪 Strategy Backtest", "🎯 Today's Signals", "📊 Track Record", "💰 Position Sizing"]
+tab_screen, tab_strategy, tab_today, tab_track, tab_size, tab_journal = st.tabs(
+    ["🔍 Screener", "🧪 Strategy Backtest", "🎯 Today's Signals", "📊 Track Record", "💰 Position Sizing", "📒 Trade Journal"]
 )
 
 # ---------------------------------------------------------------------------
@@ -568,3 +569,112 @@ with tab_size:
         "wins. Pick your risk % and stop level BEFORE entering, and don't widen a stop mid-trade "
         "to avoid taking a loss -- that's one of the most common ways disciplined plans break down."
     )
+
+# ---------------------------------------------------------------------------
+# Tab 6: personal trade journal (your real trades, not signal outcomes)
+# ---------------------------------------------------------------------------
+with tab_journal:
+    st.subheader("Trade journal")
+    st.caption(
+        "Your actual trades -- distinct from the Track Record tab, which scores what the "
+        "SIGNALS did automatically. This is what YOU actually did with them."
+    )
+
+    try:
+        journal_df, journal_sha = journal_store.load_journal()
+        journal_available = True
+    except Exception as e:
+        journal_available = False
+        st.error(
+            f"Couldn't connect to the journal storage ({e}). This needs GITHUB_TOKEN and "
+            "GITHUB_REPO set in this app's Streamlit Cloud secrets (Settings -> Secrets), "
+            "separate from your GitHub Actions secrets."
+        )
+
+    if journal_available:
+        with st.expander("➕ Log a new trade", expanded=journal_df.empty):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                j_ticker = st.text_input("Ticker", key="j_ticker").strip().upper()
+                j_entry_date = st.date_input("Entry date", value=pd.Timestamp.today(), key="j_entry_date")
+            with c2:
+                j_entry_price = st.number_input("Entry price ($)", min_value=0.01, value=100.0, step=0.5, key="j_entry_price")
+                j_units = st.number_input("Units (shares)", min_value=1, value=1, step=1, key="j_units")
+            with c3:
+                j_stop_loss = st.number_input("Stop-loss price ($)", min_value=0.0, value=0.0, step=0.5, key="j_stop_loss")
+                j_sell_trigger = st.number_input("Sell trigger / target ($)", min_value=0.0, value=0.0, step=0.5, key="j_sell_trigger")
+            j_notes = st.text_input("Notes (optional)", key="j_notes")
+
+            if st.button("Add to journal", type="primary", key="j_add"):
+                if not j_ticker:
+                    st.warning("Enter a ticker first.")
+                else:
+                    new_row = {
+                        "ticker": j_ticker,
+                        "entry_date": str(j_entry_date),
+                        "entry_price": j_entry_price,
+                        "units": j_units,
+                        "total_cost": round(j_entry_price * j_units, 2),
+                        "stop_loss": j_stop_loss if j_stop_loss > 0 else None,
+                        "sell_trigger": j_sell_trigger if j_sell_trigger > 0 else None,
+                        "status": "open",
+                        "exit_date": None, "exit_price": None,
+                        "realized_pnl": None, "realized_pnl_pct": None,
+                        "notes": j_notes,
+                    }
+                    updated = pd.concat([journal_df, pd.DataFrame([new_row])], ignore_index=True)
+                    try:
+                        journal_store.save_journal(updated, journal_sha, f"Log trade: {j_ticker}")
+                        st.success(f"Logged {j_ticker}.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to save: {e}")
+
+        open_trades = journal_df[journal_df["status"] == "open"]
+        closed_trades_j = journal_df[journal_df["status"] == "closed"]
+
+        if not open_trades.empty:
+            st.markdown("**Open positions**")
+            st.dataframe(open_trades.drop(columns=["exit_date", "exit_price", "realized_pnl", "realized_pnl_pct"]),
+                         use_container_width=True, hide_index=True)
+
+            with st.expander("✅ Close a position"):
+                open_labels = [f"{r['ticker']} ({r['entry_date']}, {r['units']} units)" for _, r in open_trades.iterrows()]
+                selected = st.selectbox("Select position to close", open_labels, key="j_close_select")
+                sel_idx = open_trades.index[open_labels.index(selected)]
+
+                cc1, cc2 = st.columns(2)
+                j_exit_date = cc1.date_input("Exit date", value=pd.Timestamp.today(), key="j_exit_date")
+                j_exit_price = cc2.number_input("Exit price ($)", min_value=0.01, value=100.0, step=0.5, key="j_exit_price")
+
+                if st.button("Close this trade", type="primary", key="j_close_btn"):
+                    row = journal_df.loc[sel_idx]
+                    entry_price = float(row["entry_price"])
+                    units = float(row["units"])
+                    pnl = (j_exit_price - entry_price) * units
+                    pnl_pct = (j_exit_price / entry_price - 1) * 100
+
+                    journal_df.loc[sel_idx, "status"] = "closed"
+                    journal_df.loc[sel_idx, "exit_date"] = str(j_exit_date)
+                    journal_df.loc[sel_idx, "exit_price"] = j_exit_price
+                    journal_df.loc[sel_idx, "realized_pnl"] = round(pnl, 2)
+                    journal_df.loc[sel_idx, "realized_pnl_pct"] = round(pnl_pct, 2)
+
+                    try:
+                        journal_store.save_journal(journal_df, journal_sha, f"Close trade: {row['ticker']}")
+                        st.success(f"Closed {row['ticker']} at ${j_exit_price} ({pnl_pct:+.2f}%).")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to save: {e}")
+        else:
+            st.info("No open positions logged yet.")
+
+        if not closed_trades_j.empty:
+            st.markdown("**Closed positions**")
+            cols = st.columns(3)
+            total_pnl = closed_trades_j["realized_pnl"].sum()
+            win_rate = (closed_trades_j["realized_pnl"] > 0).mean() * 100
+            cols[0].metric("Total realized P&L", f"${total_pnl:,.2f}")
+            cols[1].metric("Win rate", f"{win_rate:.1f}%")
+            cols[2].metric("Trades closed", len(closed_trades_j))
+            st.dataframe(style_pnl(closed_trades_j, "realized_pnl_pct"), use_container_width=True, hide_index=True)
