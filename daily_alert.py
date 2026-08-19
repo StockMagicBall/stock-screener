@@ -15,6 +15,12 @@ Optional environment variables (have sensible defaults if not set):
     SCORE_QUANTILE      -- default 0.8
     CONFIRM_WINDOW_DAYS -- default 3
     WATCH_NEAR_PCT      -- default 15 (how close to threshold counts as "watch")
+    MIN_CONVICTION      -- default HIGH (only email confirmed signals at or above this tier:
+                            HIGH, MODERATE, or LOW)
+    ACCOUNT_EQUITY      -- default 10000 (used for the position sizing shown in each email)
+    RISK_PCT            -- default 1.0 (% of account risked per trade for sizing)
+    STOP_LOSS_PCT       -- default 5.0 (must match the stop-loss % used elsewhere, so the
+                            sizing reflects the actual stop the strategy would use)
     SMTP_SERVER         -- default smtp.gmail.com
     SMTP_PORT           -- default 587
 
@@ -27,19 +33,32 @@ import smtplib
 import sys
 from email.mime.text import MIMEText
 
-from strategy import get_todays_signals
+from strategy import get_todays_signals, calculate_position_size, CONVICTION_RANK
 
 DEFAULT_TICKERS = "AAPL,MSFT,NVDA,TSLA,AMD,AMZN,GOOGL,META,NFLX,AVGO,AMC,BYND,GME,GPRO,^HSI,SPY,IWM,PDD,JD,TSLL,BULL,RKT,ENPH,^VIX,INTC,DOGE-USD,BABA,PYPL,BTC-USD,DJT,HOOD,ROBN,ETSY,GOOG,NKE,SOFI,COIN,BIDU,UBER,FUBO,SHOP,ARKG,KOSS,NIO,SMCI,BB,MU,DIS,DELL,PLTR,BRK-A,LULU,ROKU,ABNB,UVXY,AI"
 
 
-def build_email_body(confirmed_df, awaiting_df) -> str:
+def build_email_body(confirmed_df, awaiting_df, account_equity, risk_pct, stop_loss_pct) -> str:
     lines = []
-    lines.append("Confirmed LONG SETUP signals:\n")
+    lines.append(f"Confirmed HIGH-conviction LONG SETUP signals (sized for ${account_equity:,.0f} account, {risk_pct}% risk/trade):\n")
     for _, row in confirmed_df.iterrows():
+        entry_price = row["close"]
+        stop_price = entry_price * (1 - stop_loss_pct / 100)
+        sizing = calculate_position_size(account_equity, risk_pct, entry_price, stop_price)
+
         lines.append(
-            f"  {row['ticker']}  |  close: ${row['close']}  |  score: {row['score']}  "
+            f"  {row['ticker']}  |  close: ${row['close']}  |  score: {row['score']} "
+            f"({row.get('conviction', '?')} conviction)  "
             f"|  confirmed {row.get('days_to_confirm', '?')} day(s) after signal"
         )
+        if sizing:
+            lines.append(
+                f"      -> Suggested size: {sizing['shares']} shares (${sizing['position_value']:,.2f}, "
+                f"{sizing['pct_of_account']}% of account) | stop: ${sizing['stop_price']} "
+                f"| risking: ${sizing['risk_amount']:,.2f}"
+            )
+        else:
+            lines.append("      -> Could not compute sizing for this price.")
 
     if not awaiting_df.empty:
         lines.append("\nAlso awaiting confirmation (not yet actionable):\n")
@@ -47,7 +66,10 @@ def build_email_body(confirmed_df, awaiting_df) -> str:
             lines.append(f"  {row['ticker']}  |  close: ${row['close']}  |  score: {row['score']}")
 
     lines.append(
-        "\n---\nReminder: this is a hypothesis-testing tool, not financial advice. "
+        "\n---\nReminder: this is a hypothesis-testing tool, not financial advice. Position "
+        "sizing shown is a standard risk-based calculation, not a recommendation for your "
+        "specific situation -- verify the numbers yourself before acting. Conviction tiers "
+        "reflect how many signal components stacked together, not a predicted win probability. "
         "No system can guarantee winning trades -- confirm with your own research "
         "before acting on anything here."
     )
@@ -123,6 +145,10 @@ def main():
     score_quantile = float(os.environ.get("SCORE_QUANTILE", "0.8"))
     confirm_window_days = int(os.environ.get("CONFIRM_WINDOW_DAYS", "3"))
     watch_near_pct = float(os.environ.get("WATCH_NEAR_PCT", "15"))
+    min_conviction = os.environ.get("MIN_CONVICTION", "HIGH").upper()
+    account_equity = float(os.environ.get("ACCOUNT_EQUITY", "10000"))
+    risk_pct = float(os.environ.get("RISK_PCT", "1.0"))
+    stop_loss_pct = float(os.environ.get("STOP_LOSS_PCT", "5.0"))
 
     print(f"Checking {len(tickers)} tickers for confirmed signals...", file=sys.stderr)
     signals = get_todays_signals(
@@ -135,19 +161,24 @@ def main():
         print("No data returned -- check tickers and network access.", file=sys.stderr)
         return
 
-    confirmed = signals[signals["signal"] == "LONG SETUP (confirmed)"]
+    all_confirmed = signals[signals["signal"] == "LONG SETUP (confirmed)"]
+    min_rank = CONVICTION_RANK.get(min_conviction, 2)
+    confirmed = all_confirmed[
+        all_confirmed["conviction"].map(lambda c: CONVICTION_RANK.get(c, -1)) >= min_rank
+    ]
     awaiting = signals[signals["signal"] == "AWAITING CONFIRMATION"]
     near_threshold = signals[signals["signal"] == "WATCH (near threshold)"]
 
     print(
-        f"Confirmed: {len(confirmed)}, Awaiting: {len(awaiting)}, Near threshold: {len(near_threshold)}",
+        f"Confirmed (all): {len(all_confirmed)}, Confirmed (>={min_conviction}): {len(confirmed)}, "
+        f"Awaiting: {len(awaiting)}, Near threshold: {len(near_threshold)}",
         file=sys.stderr,
     )
 
-    # Confirmed buy signals -- the main alert, highest priority
+    # Confirmed buy signals at or above the conviction floor -- the main alert, highest priority
     if not confirmed.empty:
-        subject = f"[Swing Screener] {len(confirmed)} confirmed signal(s): " + ", ".join(confirmed["ticker"])
-        body = build_email_body(confirmed, awaiting)
+        subject = f"[Swing Screener] {len(confirmed)} {min_conviction}-conviction signal(s): " + ", ".join(confirmed["ticker"])
+        body = build_email_body(confirmed, awaiting, account_equity, risk_pct, stop_loss_pct)
         try:
             send_email(subject, body)
             print("Confirmed-signal email sent successfully.", file=sys.stderr)
@@ -158,7 +189,7 @@ def main():
             print(f"Failed to send confirmed-signal email: {e}", file=sys.stderr)
             sys.exit(1)
     else:
-        print("No confirmed signals -- no buy-alert email sent.", file=sys.stderr)
+        print(f"No confirmed signals at or above {min_conviction} conviction -- no buy-alert email sent.", file=sys.stderr)
 
     # High-watch alert -- separate, lower-urgency trigger for setups getting close
     watch_count = len(awaiting) + len(near_threshold)
