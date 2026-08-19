@@ -131,6 +131,59 @@ def get_institutional_context(ticker: str) -> dict:
     }
 
 
+def get_current_price(ticker: str) -> dict:
+    """
+    Current price for a ticker, aware of pre-market/after-hours for US stocks
+    and always-on trading for crypto (tickers ending in -USD).
+
+    Returns a dict with:
+        price       -- the most current price available
+        market_state -- 'REGULAR', 'PRE', 'POST', 'CLOSED', or 'CRYPTO'
+        error       -- set if the fetch failed
+
+    IMPORTANT: pre-market/after-hours prices reflect thin, less reliable
+    trading volume compared to regular session prices -- treat them as
+    directionally useful, not as precise as a regular-hours quote.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        return {"price": None, "market_state": None, "error": "yfinance not installed"}
+
+    ticker = ticker.strip().upper()
+    is_crypto = ticker.endswith("-USD")
+
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+
+        if is_crypto:
+            price = info.get("regularMarketPrice") or info.get("currentPrice")
+            if price is not None:
+                return {"price": float(price), "market_state": "CRYPTO", "error": None}
+        else:
+            state = info.get("marketState", "")  # e.g. 'PRE', 'REGULAR', 'POST', 'CLOSED'
+            post_price = info.get("postMarketPrice")
+            pre_price = info.get("preMarketPrice")
+            regular_price = info.get("regularMarketPrice") or info.get("currentPrice")
+
+            if state == "POST" and post_price is not None:
+                return {"price": float(post_price), "market_state": "POST", "error": None}
+            if state == "PRE" and pre_price is not None:
+                return {"price": float(pre_price), "market_state": "PRE", "error": None}
+            if regular_price is not None:
+                return {"price": float(regular_price), "market_state": state or "REGULAR", "error": None}
+
+        # fallback: most recent daily close if nothing above worked
+        df = fetch_history(ticker, period="5d")
+        if df is not None and not df.empty:
+            return {"price": float(df["close"].iloc[-1]), "market_state": "CLOSED (last close)", "error": None}
+
+        return {"price": None, "market_state": None, "error": "no price data available"}
+    except Exception as e:
+        return {"price": None, "market_state": None, "error": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # Indicators
 # ---------------------------------------------------------------------------
