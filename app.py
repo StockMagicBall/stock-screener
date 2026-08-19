@@ -16,7 +16,7 @@ st.set_page_config(page_title="Swing Screener", page_icon="📈", layout="wide")
 # ---------------------------------------------------------------------------
 # Theme: trading-terminal aesthetic -- dark navy, monospace data, amber signature
 # ---------------------------------------------------------------------------
-TICKER_TAPE = ["AAPL", "MSFT", "NVDA", "TSLA", "AMD", "AMZN", "GOOGL", "META", "NFLX", "AVGO"]
+TICKER_TAPE = ["AAPL", "MSFT", "NVDA", "TSLA", "AMD", "AMZN", "GOOGL", "META", "NFLX", "AVGO", "AMC", "BYND", "GME", "GPRO", "^HSI", "SPY", "IWM", "PDD", "JD", "TSLL", "BULL", "RKT", "ENPH", "^VIX", "INTC", "DOGE-USD", "BABA", "PYPL", "BTC-USD", "DJT", "HOOD", "ROBN", "ETSY", "GOOG", "NKE", "SOFI", "COIN", "BIDU", "UBER", "FUBO", "SHOP", "ARKG", "KOSS", "NIO", "SMCI", "BB", "MU", "DIS", "DELL", "PLTR", "BRK-A", "LULU", "ROKU", "ABNB", "UVXY", "AI"]
 
 st.markdown(
     """
@@ -161,7 +161,7 @@ with tab_screen:
         st.header("Screener Settings")
         tickers_input = st.text_area(
             "Tickers (one per line, or comma-separated)",
-            value="AAPL\nMSFT\nNVDA\nTSLA\nAMD\nAMZN\nGOOGL\nMETA\nNFLX\nAVGO",
+            value="AAPL\nMSFT\nNVDA\nTSLA\nAMD\nAMZN\nGOOGL\nMETA\nNFLX\nAVGO\nAMC\nBYND\nGME\nGPRO\n^HSI\nSPY\nIWM\nPDD\nJD\nTSLL\nBULL\nRKT\nENPH\n^VIX\nINTC\nDOGE-USD\nBABA\nPYPL\nBTC-USD\nDJT\nHOOD\nROBN\nETSY\nGOOG\nNKE\nSOFI\nCOIN\nBIDU\nUBER\nFUBO\nSHOP\nARKG\nKOSS\nNIO\nSMCI\nBB\nMU\nDIS\nDELL\nPLTR\nBRK-A\nLULU\nROKU\nABNB\nUVXY\nAI",
             height=220,
             key="screener_tickers",
         )
@@ -210,7 +210,7 @@ with tab_strategy:
     with col1:
         strat_tickers_input = st.text_area(
             "Tickers to backtest",
-            value="AAPL\nMSFT\nNVDA\nTSLA\nAMD\nAMZN\nGOOGL\nMETA\nNFLX\nAVGO",
+            value="AAPL\nMSFT\nNVDA\nTSLA\nAMD\nAMZN\nGOOGL\nMETA\nNFLX\nAVGO\nAMC\nBYND\nGME\nGPRO\n^HSI\nSPY\nIWM\nPDD\nJD\nTSLL\nBULL\nRKT\nENPH\n^VIX\nINTC\nDOGE-USD\nBABA\nPYPL\nBTC-USD\nDJT\nHOOD\nROBN\nETSY\nGOOG\nNKE\nSOFI\nCOIN\nBIDU\nUBER\nFUBO\nSHOP\nARKG\nKOSS\nNIO\nSMCI\nBB\nMU\nDIS\nDELL\nPLTR\nBRK-A\nLULU\nROKU\nABNB\nUVXY\nAI",
             height=180,
             key="strategy_tickers",
         )
@@ -366,7 +366,7 @@ with tab_today:
     st.subheader("What the strategy flags right now")
     today_tickers_input = st.text_area(
         "Tickers to check",
-        value="AAPL\nMSFT\nNVDA\nTSLA\nAMD\nAMZN\nGOOGL\nMETA\nNFLX\nAVGO",
+        value="AAPL\nMSFT\nNVDA\nTSLA\nAMD\nAMZN\nGOOGL\nMETA\nNFLX\nAVGO\nAMC\nBYND\nGME\nGPRO\n^HSI\nSPY\nIWM\nPDD\nJD\nTSLL\nBULL\nRKT\nENPH\n^VIX\nINTC\nDOGE-USD\nBABA\nPYPL\nBTC-USD\nDJT\nHOOD\nROBN\nETSY\nGOOG\nNKE\nSOFI\nCOIN\nBIDU\nUBER\nFUBO\nSHOP\nARKG\nKOSS\nNIO\nSMCI\nBB\nMU\nDIS\nDELL\nPLTR\nBRK-A\nLULU\nROKU\nABNB\nUVXY\nAI",
         height=180,
         key="today_tickers",
     )
