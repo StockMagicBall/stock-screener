@@ -156,8 +156,8 @@ def style_signal(df: pd.DataFrame, col: str = "signal"):
     return df.style.apply(_row, axis=1) if col in df.columns else df
 
 
-tab_screen, tab_strategy, tab_today, tab_track = st.tabs(
-    ["🔍 Screener", "🧪 Strategy Backtest", "🎯 Today's Signals", "📊 Track Record"]
+tab_screen, tab_strategy, tab_today, tab_track, tab_size = st.tabs(
+    ["🔍 Screener", "🧪 Strategy Backtest", "🎯 Today's Signals", "📊 Track Record", "💰 Position Sizing"]
 )
 
 # ---------------------------------------------------------------------------
@@ -486,3 +486,85 @@ with tab_track:
                 "strategy's own trailing-stop/trend-exit rules would have done -- this is a simpler, "
                 "more transparent test of the raw signal, not the full trading strategy."
             )
+
+# ---------------------------------------------------------------------------
+# Tab 5: risk-based position sizing calculator
+# ---------------------------------------------------------------------------
+with tab_size:
+    st.subheader("Position sizing calculator")
+    st.caption(
+        "Not financial advice -- this is a standard, widely-used risk-management calculation, "
+        "not a recommendation for your specific situation. Sizes each trade by how much you're "
+        "willing to LOSE if the stop hits, not by an equal dollar split across positions -- this "
+        "differs from the backtest, which used equal-weight slots for simplicity."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        account_equity = st.number_input(
+            "Total account equity ($)", min_value=100.0, value=10000.0, step=500.0, key="size_equity",
+        )
+        risk_pct = st.slider(
+            "Risk per trade (% of account)", 0.25, 5.0, 1.0, step=0.25, key="size_risk_pct",
+        )
+        if risk_pct > 2.0:
+            st.warning(
+                "Risking more than ~2% per trade on a single position is aggressive by common "
+                "convention -- a short losing streak can do real damage to an account at this size."
+            )
+    with col2:
+        entry_price = st.number_input("Planned entry price ($)", min_value=0.01, value=100.0, step=0.5, key="size_entry")
+        stop_price = st.number_input("Stop-loss price ($)", min_value=0.01, value=95.0, step=0.5, key="size_stop")
+
+    if stop_price >= entry_price:
+        st.error("Stop-loss price must be below your entry price for a long position.")
+    else:
+        risk_amount = account_equity * (risk_pct / 100)
+        risk_per_share = entry_price - stop_price
+        shares = int(risk_amount // risk_per_share)
+        position_value = shares * entry_price
+        pct_of_account = (position_value / account_equity * 100) if account_equity > 0 else 0
+        stop_distance_pct = (risk_per_share / entry_price) * 100
+
+        st.divider()
+        cols = st.columns(4)
+        cols[0].metric("Dollar risk (if stopped out)", f"${risk_amount:,.2f}")
+        cols[1].metric("Shares to buy", f"{shares:,}")
+        cols[2].metric("Position value", f"${position_value:,.2f}")
+        cols[3].metric("% of account in this trade", f"{pct_of_account:.1f}%")
+
+        if shares == 0:
+            st.warning(
+                "Stop distance is too wide relative to your risk budget -- 0 shares fit within your "
+                "risk limit at this entry/stop combination. Either widen your risk %, tighten the "
+                "stop, or skip this trade."
+            )
+        elif pct_of_account > 50:
+            st.warning(
+                f"This position would use {pct_of_account:.0f}% of your total account. A tight stop "
+                "distance can produce a large position value even at low % risk -- worth double-"
+                "checking this isn't over-concentrating your account in one stock."
+            )
+
+        st.caption(f"Stop distance: {stop_distance_pct:.1f}% below entry.")
+
+    st.divider()
+    st.markdown("**Portfolio-level check (optional)**")
+    max_open = st.slider("Planned max concurrent positions", 1, 10, 5, key="size_max_open")
+    total_heat = risk_pct * max_open
+    st.metric("Total portfolio risk if ALL positions stopped out same day", f"{total_heat:.1f}%")
+    if total_heat > 10:
+        st.warning(
+            "Total portfolio heat above ~10% is high -- a genuinely bad, correlated day (several "
+            "positions moving against you at once, which happens more often than independent "
+            "probability suggests) could produce a serious drawdown. Consider fewer concurrent "
+            "positions or a lower risk % per trade."
+        )
+    else:
+        st.success("Total portfolio heat is within a commonly-used conservative range.")
+
+    st.caption(
+        "Reminder: this calculator only sizes the position -- it doesn't predict whether the trade "
+        "wins. Pick your risk % and stop level BEFORE entering, and don't widen a stop mid-trade "
+        "to avoid taking a loss -- that's one of the most common ways disciplined plans break down."
+    )
