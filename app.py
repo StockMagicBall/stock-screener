@@ -1,6 +1,3 @@
-# app.py
-
-```python
 """
 Streamlit web UI for the swing/day-trade screener + directional strategy.
 
@@ -180,4 +177,3 @@ with tab_today:
                 "trending up (above 50-day average, MACD bullish) as of the most recent close. "
                 "It is not a recommendation to buy — confirm with your own research."
             )
-```
