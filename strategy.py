@@ -34,6 +34,26 @@ warnings.filterwarnings("ignore")
 # Direction filter
 # ---------------------------------------------------------------------------
 
+def conviction_tier(score: float) -> str:
+    """
+    Bucket a signal-day score into a rough conviction tier, based on what the
+    scoring system's components mean (see backtest.py's compute_score_series):
+    a score in the 30s+ usually means several signals stacked together
+    (volume spike, breakout, RSI extreme, etc), while a score under ~18 is
+    typically just one weak factor.
+
+    IMPORTANT: this is NOT a predicted win probability. The backtests showed
+    a real but modest correlation (roughly 0.12-0.24) between score and
+    MOVEMENT SIZE -- not a score that predicts a winning trade. Treat this
+    as "how many independent things lined up," not "how likely to profit."
+    """
+    if score >= 40:
+        return "HIGH"
+    if score >= 25:
+        return "MODERATE"
+    return "LOW"
+
+
 def compute_direction(df: pd.DataFrame) -> pd.Series:
     """
     Simple trend filter: price above its 50-day average AND MACD line above
@@ -420,6 +440,7 @@ def get_todays_signals(
     tickers: list, period: str = "1y", score_quantile: float = 0.8,
     include_context: bool = False,
     require_confirmation: bool = True, confirm_window_days: int = 3,
+    watch_near_pct: float = 15.0,
 ) -> pd.DataFrame:
     """
     What the strategy would flag RIGHT NOW, for each ticker's most recent day.
@@ -427,12 +448,15 @@ def get_todays_signals(
     With require_confirmation=True (matches the backtest logic), a raw
     score+trend signal must show real follow-through -- a close above the
     signal day's high, within confirm_window_days -- before it counts as an
-    actionable setup. Three states:
+    actionable setup. Signal states:
       - "LONG SETUP (confirmed)": raw signal fired recently AND price has
         already closed above that signal day's high -- actionable now.
       - "AWAITING CONFIRMATION": raw signal fired recently but hasn't shown
         follow-through yet -- still inside its confirmation window, don't
         act on it yet.
+      - "WATCH (near threshold)": no raw signal yet, but today's score is
+        within watch_near_pct of the entry threshold AND the trend is
+        already bullish -- getting close, worth keeping an eye on.
       - "no signal": nothing meeting the criteria currently.
 
     If include_context=True, also pulls news sentiment and institutional
@@ -463,11 +487,15 @@ def get_todays_signals(
 
         signal = "no signal"
         days_to_confirm = None
+        signal_day_score = None
+        signal_date = None
 
         if require_confirmation:
             # scan all raw signals within the lookback window -- if ANY of them
             # has since confirmed, that's an actionable setup; otherwise if any
-            # raw signal exists unconfirmed, it's still awaiting follow-through
+            # raw signal exists unconfirmed, it's still awaiting follow-through.
+            # Track the score/date FROM THE SIGNAL DAY ITSELF, not today --
+            # today's score can drift well below what actually triggered this.
             lookback_start = max(0, last - confirm_window_days)
             found_confirmed, found_awaiting = False, False
             for sig_pos in range(lookback_start, last + 1):
@@ -482,8 +510,13 @@ def get_todays_signals(
                         break
                 if confirmed_this:
                     found_confirmed = True
+                    signal_day_score = float(score.iloc[sig_pos])
+                    signal_date = df.index[sig_pos]
                 else:
                     found_awaiting = True
+                    if not found_confirmed:  # don't let an awaiting hit overwrite a confirmed one
+                        signal_day_score = float(score.iloc[sig_pos])
+                        signal_date = df.index[sig_pos]
             signal = (
                 "LONG SETUP (confirmed)" if found_confirmed
                 else "AWAITING CONFIRMATION" if found_awaiting
@@ -491,15 +524,35 @@ def get_todays_signals(
             )
         else:
             signal = "LONG SETUP" if (pd.notna(s) and s >= threshold and d == "bullish") else "no signal"
+            if signal == "LONG SETUP":
+                signal_day_score = float(s)
+                signal_date = df.index[last]
+
+        # Near-threshold watch: only applies when nothing above already fired --
+        # i.e. no raw signal today or in the recent confirmation window.
+        if signal == "no signal" and pd.notna(s) and d == "bullish" and threshold > 0:
+            watch_floor = threshold * (1 - watch_near_pct / 100)
+            if watch_floor <= s < threshold:
+                signal = "WATCH (near threshold)"
+
+        display_score = signal_day_score if signal_day_score is not None else (float(s) if pd.notna(s) else None)
+
+        conviction = None
+        if signal in ("LONG SETUP", "LONG SETUP (confirmed)") and display_score is not None:
+            conviction = conviction_tier(display_score)
 
         row = {
             "ticker": t,
             "close": round(float(df["close"].iloc[last]), 2),
-            "score": round(float(s), 1) if pd.notna(s) else None,
+            "score": round(display_score, 1) if display_score is not None else None,
+            "conviction": conviction,
+            "today_score": round(float(s), 1) if pd.notna(s) else None,
             "score_threshold": round(float(threshold), 1),
             "direction": d,
             "signal": signal,
         }
+        if signal_date is not None:
+            row["signal_date"] = signal_date.date()
         if require_confirmation:
             row["days_to_confirm"] = days_to_confirm
 
