@@ -54,6 +54,40 @@ def conviction_tier(score: float) -> str:
     return "LOW"
 
 
+CONVICTION_RANK = {"LOW": 0, "MODERATE": 1, "HIGH": 2}
+
+
+def calculate_position_size(
+    account_equity: float, risk_pct: float, entry_price: float, stop_price: float
+) -> dict | None:
+    """
+    Risk-based position sizing: sizes a trade by how much you're willing to
+    LOSE if the stop hits, not by an equal dollar split. Returns None if the
+    stop isn't below the entry (invalid for a long position).
+
+    Not financial advice -- this is a standard, widely-used risk calculation,
+    not a recommendation for any specific account or situation.
+    """
+    if stop_price >= entry_price or entry_price <= 0 or account_equity <= 0:
+        return None
+
+    risk_amount = account_equity * (risk_pct / 100)
+    risk_per_share = entry_price - stop_price
+    shares = int(risk_amount // risk_per_share)
+    position_value = shares * entry_price
+    pct_of_account = (position_value / account_equity * 100) if account_equity > 0 else 0
+    stop_distance_pct = (risk_per_share / entry_price) * 100
+
+    return {
+        "shares": shares,
+        "risk_amount": round(risk_amount, 2),
+        "position_value": round(position_value, 2),
+        "pct_of_account": round(pct_of_account, 1),
+        "stop_distance_pct": round(stop_distance_pct, 1),
+        "stop_price": round(stop_price, 2),
+    }
+
+
 def compute_direction(df: pd.DataFrame) -> pd.Series:
     """
     Simple trend filter: price above its 50-day average AND MACD line above
