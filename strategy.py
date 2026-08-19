@@ -1,234 +1,179 @@
 """
-Directional strategy layer on top of the screener's movement score.
-
-The screener score (from backtest.py) predicts MOVEMENT SIZE, not direction
-(the backtest showed ~53-58% positive days on high-score days -- barely
-above a coin flip). This module adds a trend/direction filter and combines
-it with the movement score into an actual long-only trading rule, then
-simulates real trades (entry next-day open, hold N days, exit at close,
-minus round-trip costs) to see whether the combination has a genuine edge.
-
-IMPORTANT HONESTY NOTE: this simulates trades assuming perfect fills at
-open/close prices, with a simple flat cost estimate. No system can promise
-winning trades -- treat all output here as a hypothesis test, not a
-guarantee, and paper-trade before risking real money.
+Streamlit web UI for the swing/day-trade screener + directional strategy.
 
 Run with:
-    python strategy.py --tickers AAPL MSFT NVDA TSLA AMD --period 3y
+    streamlit run app.py
 """
 
-import argparse
-import sys
-import warnings
-
-import numpy as np
+import streamlit as st
 import pandas as pd
 
-from swing_screener import fetch_history, macd
-from backtest import compute_indicator_frame, compute_score_series
+from swing_screener import run_screen
+from strategy import simulate_portfolio, get_todays_signals
 
-warnings.filterwarnings("ignore")
+st.set_page_config(page_title="Swing Screener", layout="wide")
+st.title("📈 Swing / Day-Trade Screener")
+st.caption(
+    "Educational tool, not financial advice. The movement score flags unusual "
+    "short-term setups; the strategy tab adds a trend filter on top and backtests "
+    "it as real trades. No system can guarantee winning trades — treat this as a "
+    "hypothesis-testing tool, and paper-trade before risking real money."
+)
 
-
-# ---------------------------------------------------------------------------
-# Direction filter
-# ---------------------------------------------------------------------------
-
-def compute_direction(df: pd.DataFrame) -> pd.Series:
-    """
-    Simple trend filter: price above its 50-day average AND MACD line above
-    its signal line = 'bullish'. Price below 50-day average AND MACD below
-    signal = 'bearish'. Otherwise 'neutral'.
-    """
-    close = df["close"]
-    sma50 = close.rolling(50).mean()
-    macd_line = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-
-    direction = pd.Series("neutral", index=df.index)
-    bullish = (close > sma50) & (macd_line > signal_line)
-    bearish = (close < sma50) & (macd_line < signal_line)
-    direction[bullish] = "bullish"
-    direction[bearish] = "bearish"
-    direction[sma50.isna()] = np.nan
-    return direction
-
+tab_screen, tab_strategy, tab_today = st.tabs(
+    ["🔍 Screener", "🧪 Strategy Backtest", "🎯 Today's Signals"]
+)
 
 # ---------------------------------------------------------------------------
-# Trade simulation (long-only: movement score flags an unusual setup,
-# direction filter requires the trend to already be up)
+# Tab 1: original movement screener
 # ---------------------------------------------------------------------------
-
-def simulate_trades(
-    df: pd.DataFrame,
-    ticker: str,
-    score_quantile: float = 0.8,
-    holding_days: int = 3,
-    cost_bps: float = 10.0,  # round-trip cost estimate in basis points (0.10%)
-) -> pd.DataFrame:
-    ind = compute_indicator_frame(df)
-    score = compute_score_series(ind)
-    direction = compute_direction(df)
-
-    valid = score.notna() & direction.notna()
-    threshold = score[valid].quantile(score_quantile)
-
-    entry_signal = valid & (score >= threshold) & (direction == "bullish")
-    entry_dates = df.index[entry_signal]
-
-    trades = []
-    for entry_date in entry_dates:
-        pos = df.index.get_loc(entry_date)
-        entry_idx = pos + 1  # enter next trading day's open -- no lookahead
-        exit_idx = entry_idx + holding_days - 1
-        if exit_idx >= len(df):
-            continue  # not enough future data to complete this trade
-
-        entry_price = df["open"].iloc[entry_idx]
-        exit_price = df["close"].iloc[exit_idx]
-        gross_return = exit_price / entry_price - 1
-        net_return = gross_return - (cost_bps / 10000)
-
-        trades.append(
-            {
-                "ticker": ticker,
-                "signal_date": entry_date.date(),
-                "entry_date": df.index[entry_idx].date(),
-                "exit_date": df.index[exit_idx].date(),
-                "entry_price": round(float(entry_price), 2),
-                "exit_price": round(float(exit_price), 2),
-                "score": round(float(score.loc[entry_date]), 1),
-                "gross_return_pct": round(float(gross_return) * 100, 2),
-                "net_return_pct": round(float(net_return) * 100, 2),
-                "win": bool(net_return > 0),
-            }
+with tab_screen:
+    with st.sidebar:
+        st.header("Screener Settings")
+        tickers_input = st.text_area(
+            "Tickers (one per line, or comma-separated)",
+            value="AAPL\nMSFT\nNVDA\nTSLA\nAMD\nAMZN\nGOOGL\nMETA\nNFLX\nAVGO",
+            height=220,
+            key="screener_tickers",
         )
+        period = st.selectbox("History window", ["3mo", "6mo", "1y"], index=1, key="screener_period")
+        top_n = st.slider("Show top N results", 5, 50, 15, key="screener_topn")
+        run_button = st.button("Run Screen", type="primary", key="run_screen")
 
-    return pd.DataFrame(trades)
-
-
-def summarize_trades(trades: pd.DataFrame) -> dict:
-    if trades.empty:
-        return {}
-
-    returns = trades["net_return_pct"] / 100
-    wins = trades["win"]
-    equity = (1 + returns).cumprod()
-    running_max = equity.cummax()
-    drawdown = (equity / running_max - 1).min()
-
-    gross_profit = returns[returns > 0].sum()
-    gross_loss = -returns[returns < 0].sum()
-
-    return {
-        "total_trades": len(trades),
-        "win_rate_pct": round(wins.mean() * 100, 1),
-        "avg_return_per_trade_pct": round(returns.mean() * 100, 2),
-        "avg_win_pct": round(returns[wins].mean() * 100, 2) if wins.any() else 0.0,
-        "avg_loss_pct": round(returns[~wins].mean() * 100, 2) if (~wins).any() else 0.0,
-        "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else float("inf"),
-        "cumulative_return_pct": round((equity.iloc[-1] - 1) * 100, 1),
-        "max_drawdown_pct": round(drawdown * 100, 1),
-    }
-
-
-def get_todays_signals(tickers: list, period: str = "1y", score_quantile: float = 0.8) -> pd.DataFrame:
-    """What the strategy would flag RIGHT NOW, for each ticker's most recent day."""
-    rows = []
-    for t in tickers:
-        t = t.strip().upper()
-        df = fetch_history(t, period=period)
-        if df is None or len(df) < 60:
-            continue
-
-        ind = compute_indicator_frame(df)
-        score = compute_score_series(ind)
-        direction = compute_direction(df)
-
-        valid = score.notna() & direction.notna()
-        threshold = score[valid].quantile(score_quantile)
-
-        last = -1
-        s = score.iloc[last]
-        d = direction.iloc[last]
-        signal = "LONG SETUP" if (pd.notna(s) and s >= threshold and d == "bullish") else "no signal"
-
-        rows.append(
-            {
-                "ticker": t,
-                "close": round(float(df["close"].iloc[last]), 2),
-                "score": round(float(s), 1) if pd.notna(s) else None,
-                "score_threshold": round(float(threshold), 1),
-                "direction": d,
-                "signal": signal,
-            }
-        )
-    out = pd.DataFrame(rows)
-    if not out.empty:
-        out = out.sort_values("score", ascending=False).reset_index(drop=True)
-    return out
-
+    if run_button:
+        raw = tickers_input.replace(",", "\n")
+        tickers = [t.strip().upper() for t in raw.splitlines() if t.strip()]
+        if not tickers:
+            st.warning("Enter at least one ticker.")
+        else:
+            with st.spinner(f"Pulling data and scoring {len(tickers)} tickers..."):
+                result = run_screen(tickers, period=period)
+            if result.empty:
+                st.error("No results — check your tickers and try again.")
+            else:
+                top = result.head(top_n)
+                st.subheader(f"Top {len(top)} results")
+                st.dataframe(
+                    top, use_container_width=True, hide_index=True,
+                    column_config={
+                        "score": st.column_config.ProgressColumn(
+                            "score", min_value=0, max_value=100, format="%.1f"
+                        ),
+                    },
+                )
+                csv = top.to_csv(index=False).encode("utf-8")
+                st.download_button("Download as CSV", data=csv, file_name="watchlist.csv", mime="text/csv")
+    else:
+        st.info("Set your tickers in the sidebar and click **Run Screen** to begin.")
 
 # ---------------------------------------------------------------------------
-# CLI runner
+# Tab 2: strategy backtest (movement score + trend direction -> simulated trades)
 # ---------------------------------------------------------------------------
-
-def main():
-    parser = argparse.ArgumentParser(description="Backtest the directional trading strategy")
-    parser.add_argument("--tickers", nargs="+", required=True)
-    parser.add_argument("--period", default="3y")
-    parser.add_argument("--holding-days", type=int, default=3)
-    parser.add_argument("--score-quantile", type=float, default=0.8)
-    parser.add_argument("--cost-bps", type=float, default=10.0)
-    parser.add_argument("--out", default="strategy_trades.csv")
-    args = parser.parse_args()
-
-    all_trades = []
-    print(f"Simulating trades across {len(args.tickers)} tickers over {args.period}...", file=sys.stderr)
-    for t in args.tickers:
-        df = fetch_history(t, period=args.period)
-        if df is None or len(df) < 100:
-            print(f"  skip {t}: insufficient data", file=sys.stderr)
-            continue
-        trades = simulate_trades(
-            df, t, score_quantile=args.score_quantile,
-            holding_days=args.holding_days, cost_bps=args.cost_bps,
-        )
-        if not trades.empty:
-            all_trades.append(trades)
-
-    if not all_trades:
-        print("No trades generated -- try a longer period or lower --score-quantile.")
-        return
-
-    trades = pd.concat(all_trades, ignore_index=True).sort_values("signal_date")
-    trades.to_csv(args.out, index=False)
-
-    pd.set_option("display.width", 160)
-    pd.set_option("display.max_columns", None)
-    print(f"\n=== {len(trades)} simulated trades (holding {args.holding_days} days, "
-          f"{args.cost_bps}bps round-trip cost) ===")
-    print(trades.tail(20).to_string(index=False))
-
-    print("\n=== Strategy summary ===")
-    summary = summarize_trades(trades)
-    for k, v in summary.items():
-        print(f"  {k}: {v}")
-
-    print(
-        "\nHow to read this:\n"
-        "  - win_rate_pct: needs to clear ~50% and, more importantly, avg_win should\n"
-        "    outweigh avg_loss -- a 45% win rate can still be profitable if wins run bigger.\n"
-        "  - profit_factor: gross profit / gross loss. Below 1.0 = losing strategy.\n"
-        "    Above 1.5 is respectable for a simple rules-based approach; treat anything\n"
-        "    above ~2.5 with suspicion (likely overfit to this specific sample).\n"
-        "  - max_drawdown_pct: worst peak-to-trough dip in simulated equity. This is the\n"
-        "    number that tells you if you could actually stomach running this for real.\n"
-        "  - This backtest assumes perfect fills and a flat cost estimate -- real slippage,\n"
-        "    spread, and execution timing will make live results worse than this, not better.\n"
-        f"\nFull trade log saved to {args.out}"
+with tab_strategy:
+    st.subheader("Backtest the directional strategy")
+    st.caption(
+        "Portfolio-level simulation: a fixed number of position slots share a real "
+        "capital pool (so simultaneous signals can't each claim 100%), and every "
+        "position exits early if it drops past your stop-loss."
     )
 
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        strat_tickers_input = st.text_area(
+            "Tickers to backtest",
+            value="AAPL\nMSFT\nNVDA\nTSLA\nAMD\nAMZN\nGOOGL\nMETA\nNFLX\nAVGO",
+            height=180,
+            key="strategy_tickers",
+        )
+        strat_period = st.selectbox("History window", ["1y", "2y", "3y", "5y"], index=2, key="strategy_period")
+    with col2:
+        holding_days = st.slider("Max holding period (trading days)", 1, 10, 3, key="holding_days")
+        score_quantile = st.slider("Score threshold (percentile)", 0.5, 0.95, 0.8, step=0.05, key="score_q")
+        cost_bps = st.number_input("Round-trip cost (bps)", min_value=0.0, value=10.0, step=1.0, key="cost_bps")
+    with col3:
+        stop_loss_pct = st.slider("Stop-loss (%)", 1.0, 15.0, 5.0, step=0.5, key="stop_loss")
+        max_concurrent = st.slider("Max concurrent positions", 1, 10, 5, key="max_concurrent")
+        starting_capital = st.number_input("Starting capital ($)", min_value=1000, value=10000, step=1000, key="capital")
 
-if __name__ == "__main__":
-    main()
+    if st.button("Run Strategy Backtest", type="primary", key="run_strategy"):
+        raw = strat_tickers_input.replace(",", "\n")
+        tickers = [t.strip().upper() for t in raw.splitlines() if t.strip()]
+
+        with st.spinner("Simulating portfolio..."):
+            result = simulate_portfolio(
+                tickers, period=strat_period, score_quantile=score_quantile,
+                holding_days=holding_days, cost_bps=cost_bps,
+                stop_loss_pct=stop_loss_pct, starting_capital=starting_capital,
+                max_concurrent=max_concurrent,
+            )
+
+        trades, equity_df, summary = result["trades"], result["equity_curve"], result["summary"]
+
+        if trades.empty:
+            st.error("No trades generated — try a longer period or lower score threshold.")
+        else:
+            st.subheader("Results")
+            cols = st.columns(4)
+            cols[0].metric("Total trades", summary["total_trades"])
+            cols[1].metric("Win rate", f"{summary['win_rate_pct']}%")
+            cols[2].metric("Profit factor", summary["profit_factor"])
+            cols[3].metric("Max drawdown", f"{summary['max_drawdown_pct']}%")
+
+            cols2 = st.columns(4)
+            cols2[0].metric("Total return", f"{summary['total_return_pct']}%")
+            cols2[1].metric("Final equity", f"${summary['final_equity']:,.0f}")
+            cols2[2].metric("Stopped out", f"{summary['stopped_out_pct']}% of trades")
+            cols2[3].metric("Skipped (no free slot)", summary["trades_skipped_capacity"])
+
+            if summary["profit_factor"] > 2.5:
+                st.warning(
+                    "Profit factor above 2.5 on a simple rules-based strategy is unusually "
+                    "high — treat this as a sign of overfitting rather than a strategy to trust outright."
+                )
+
+            st.line_chart(equity_df.set_index("date")["equity"], height=250)
+            st.caption("Real portfolio equity curve — capital shared across concurrent positions, stop-losses applied.")
+
+            st.dataframe(trades, use_container_width=True, hide_index=True)
+            csv = trades.to_csv(index=False).encode("utf-8")
+            st.download_button("Download trade log as CSV", data=csv, file_name="strategy_trades.csv", mime="text/csv")
+
+            st.caption(
+                "Reminder: perfect fills assumed at the stop/exit price, flat cost estimate. "
+                "Real slippage and execution timing will make live results worse than this, not better."
+            )
+
+# ---------------------------------------------------------------------------
+# Tab 3: today's live signals
+# ---------------------------------------------------------------------------
+with tab_today:
+    st.subheader("What the strategy flags right now")
+    today_tickers_input = st.text_area(
+        "Tickers to check",
+        value="AAPL\nMSFT\nNVDA\nTSLA\nAMD\nAMZN\nGOOGL\nMETA\nNFLX\nAVGO",
+        height=180,
+        key="today_tickers",
+    )
+    today_quantile = st.slider("Score threshold (percentile)", 0.5, 0.95, 0.8, step=0.05, key="today_q")
+
+    if st.button("Check Today's Signals", type="primary", key="run_today"):
+        raw = today_tickers_input.replace(",", "\n")
+        tickers = [t.strip().upper() for t in raw.splitlines() if t.strip()]
+        with st.spinner("Checking latest data..."):
+            signals = get_todays_signals(tickers, score_quantile=today_quantile)
+
+        if signals.empty:
+            st.error("No data returned — check your tickers.")
+        else:
+            flagged = signals[signals["signal"] == "LONG SETUP"]
+            if not flagged.empty:
+                st.success(f"{len(flagged)} ticker(s) currently meet the strategy's entry criteria")
+            else:
+                st.info("No tickers currently meet the strategy's entry criteria — that's normal, and better than false positives.")
+
+            st.dataframe(signals, use_container_width=True, hide_index=True)
+            st.caption(
+                "A 'LONG SETUP' here means: movement score above your threshold AND price "
+                "trending up (above 50-day average, MACD bullish) as of the most recent close. "
+                "It is not a recommendation to buy — confirm with your own research."
+            )
