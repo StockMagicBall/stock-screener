@@ -21,79 +21,120 @@ TICKER_TAPE = ["AAPL", "MSFT", "NVDA", "TSLA", "AMD", "AMZN", "GOOGL", "META", "
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=Manrope:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
-    html, body, [class*="css"] { font-family: 'Space Grotesk', sans-serif; }
-    .stApp { background-color: #0A0E14; }
+    html, body, [class*="css"] { font-family: 'Manrope', sans-serif; }
 
-    /* Headers */
-    h1, h2, h3 { font-family: 'Space Grotesk', sans-serif !important; letter-spacing: -0.02em; }
-    h1 {
-        background: linear-gradient(90deg, #F0A93A 0%, #FFD98A 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 700 !important;
+    .stApp {
+        background: #0B0710;
+        position: relative;
+        overflow-x: hidden;
     }
+    /* Aurora glow backdrop -- the signature element */
+    .stApp::before {
+        content: "";
+        position: fixed; inset: -20%;
+        background:
+            radial-gradient(40% 35% at 15% 20%, rgba(139,92,246,0.30), transparent 70%),
+            radial-gradient(35% 30% at 85% 15%, rgba(255,62,165,0.24), transparent 70%),
+            radial-gradient(45% 40% at 50% 90%, rgba(34,211,238,0.18), transparent 70%);
+        filter: blur(60px);
+        animation: aurora-drift 26s ease-in-out infinite alternate;
+        z-index: 0; pointer-events: none;
+    }
+    @keyframes aurora-drift {
+        0%   { transform: translate(0, 0) scale(1); }
+        100% { transform: translate(3%, -4%) scale(1.08); }
+    }
+    @media (prefers-reduced-motion: reduce) { .stApp::before { animation: none; } }
+    .block-container { position: relative; z-index: 1; }
 
-    /* Numbers everywhere: monospace, like a real terminal */
+    /* Headers -- bold, chunky, gradient */
+    h1, h2, h3 { font-family: 'Unbounded', sans-serif !important; letter-spacing: -0.01em; }
+    h1 {
+        background: linear-gradient(90deg, #8B5CF6 0%, #FF3EA5 55%, #22D3EE 100%);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        font-weight: 900 !important; text-transform: uppercase; font-size: 2.2rem !important;
+    }
+    h2, h3 { color: #F5F3FF !important; font-weight: 700 !important; }
+
     [data-testid="stMetricValue"], .stDataFrame, code {
         font-family: 'JetBrains Mono', monospace !important;
     }
 
-    /* Metric cards */
+    /* Glassmorphic metric cards */
     [data-testid="stMetric"] {
-        background: linear-gradient(155deg, #121822 0%, #0D1219 100%);
-        border: 1px solid #212B38;
-        border-radius: 10px;
-        padding: 14px 16px;
+        background: rgba(255,255,255,0.045);
+        backdrop-filter: blur(14px);
+        border: 1px solid rgba(255,255,255,0.09);
+        border-radius: 16px;
+        padding: 16px 18px;
+        box-shadow: 0 4px 24px rgba(139,92,246,0.10);
     }
-    [data-testid="stMetricLabel"] { color: #6B7889 !important; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    [data-testid="stMetricLabel"] { color: #9891A8 !important; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
+    [data-testid="stMetricValue"] { color: #F5F3FF !important; }
 
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid #212B38; }
+    /* Pill-shaped gradient tabs */
+    .stTabs [data-baseweb="tab-list"] { gap: 6px; border-bottom: none; padding-bottom: 8px; }
     .stTabs [data-baseweb="tab"] {
-        font-family: 'Space Grotesk', sans-serif; font-weight: 500; color: #6B7889;
-        padding: 10px 18px;
+        font-family: 'Unbounded', sans-serif; font-weight: 500; font-size: 0.82rem;
+        color: #9891A8; background: rgba(255,255,255,0.04);
+        border-radius: 999px; padding: 10px 20px; border: 1px solid rgba(255,255,255,0.07);
     }
     .stTabs [aria-selected="true"] {
-        color: #F0A93A !important; border-bottom: 2px solid #F0A93A !important;
+        color: #0B0710 !important;
+        background: linear-gradient(90deg, #8B5CF6, #FF3EA5) !important;
+        border: none !important; font-weight: 700;
     }
 
-    /* Buttons */
+    /* Gradient pill buttons with glow */
     .stButton>button {
-        background: linear-gradient(90deg, #F0A93A, #E0922B);
-        color: #0A0E14; font-weight: 700; border: none; border-radius: 8px;
-        transition: box-shadow 0.2s ease, transform 0.2s ease;
+        background: linear-gradient(90deg, #8B5CF6, #FF3EA5 60%, #22D3EE);
+        color: #0B0710; font-weight: 700; font-family: 'Unbounded', sans-serif; font-size: 0.85rem;
+        border: none; border-radius: 999px; padding: 0.6rem 1.4rem;
+        transition: box-shadow 0.25s ease, transform 0.2s ease;
     }
     .stButton>button:hover {
-        box-shadow: 0 0 16px rgba(240, 169, 58, 0.45); transform: translateY(-1px);
+        box-shadow: 0 0 24px rgba(255,62,165,0.5), 0 0 40px rgba(139,92,246,0.3);
+        transform: translateY(-2px);
     }
 
-    /* Ticker tape -- signature element */
+    /* Glassmorphic containers for text areas / inputs */
+    .stTextArea textarea, .stSelectbox [data-baseweb="select"], .stNumberInput input {
+        background: rgba(255,255,255,0.04) !important;
+        border: 1px solid rgba(255,255,255,0.09) !important;
+        color: #F5F3FF !important; border-radius: 10px !important;
+    }
+
+    /* Ticker tape -- signature scroll, multi-color dots */
     .ticker-tape-wrap {
-        overflow: hidden; white-space: nowrap; border-top: 1px solid #212B38;
-        border-bottom: 1px solid #212B38; background: #0D1219; padding: 8px 0; margin-bottom: 1.2rem;
+        overflow: hidden; white-space: nowrap;
+        border-radius: 999px; background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.07);
+        padding: 10px 0; margin-bottom: 1.4rem;
     }
     .ticker-tape {
         display: inline-block; padding-left: 100%;
-        animation: ticker-scroll 32s linear infinite;
-        font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: #6B7889;
+        animation: ticker-scroll 30s linear infinite;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: #C9C4DA;
     }
     .ticker-tape span { margin-right: 2.5rem; }
-    .ticker-tape .dot { color: #2FD9A8; margin-right: 4px; }
+    .ticker-tape .dot { margin-right: 5px; font-size: 0.7rem; }
     @keyframes ticker-scroll {
         0%   { transform: translateX(0); }
         100% { transform: translateX(-100%); }
     }
-    @media (prefers-reduced-motion: reduce) {
-        .ticker-tape { animation: none; padding-left: 0; }
-    }
+    @media (prefers-reduced-motion: reduce) { .ticker-tape { animation: none; padding-left: 0; } }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-_tape_html = "".join(f'<span><span class="dot">●</span>{t}</span>' for t in TICKER_TAPE * 3)
+_dot_colors = ["#8B5CF6", "#FF3EA5", "#22D3EE", "#B4FF39"]
+_tape_html = "".join(
+    f'<span><span class="dot" style="color:{_dot_colors[i % 4]}">●</span>{t}</span>'
+    for i, t in enumerate(TICKER_TAPE * 3)
+)
 st.markdown(f'<div class="ticker-tape-wrap"><div class="ticker-tape">{_tape_html}</div></div>', unsafe_allow_html=True)
 
 st.title("📈 Swing / Day-Trade Screener")
@@ -106,20 +147,20 @@ st.caption(
 
 
 def style_pnl(df: pd.DataFrame, pct_col: str = "net_return_pct"):
-    """Color-code a returns column green/coral, terminal-style."""
+    """Color-code a returns column neon-lime/hot-pink, gen-z terminal style."""
     def _color(val):
         if pd.isna(val):
             return ""
-        color = "#2FD9A8" if val > 0 else ("#FF5C6C" if val < 0 else "#6B7889")
-        return f"color: {color}; font-weight: 600;"
+        color = "#B4FF39" if val > 0 else ("#FF4D6D" if val < 0 else "#9891A8")
+        return f"color: {color}; font-weight: 700;"
     return df.style.map(_color, subset=[pct_col]) if pct_col in df.columns else df
 
 
 def style_signal(df: pd.DataFrame, col: str = "signal"):
-    """Highlight rows that meet the entry criteria, terminal-style."""
+    """Highlight rows that meet the entry criteria with a gradient glow tint."""
     def _row(row):
         if col in row and row[col] == "LONG SETUP":
-            return ["background-color: rgba(240, 169, 58, 0.12); font-weight: 600;"] * len(row)
+            return ["background: linear-gradient(90deg, rgba(139,92,246,0.16), rgba(255,62,165,0.10)); font-weight: 700;"] * len(row)
         return [""] * len(row)
     return df.style.apply(_row, axis=1) if col in df.columns else df
 
