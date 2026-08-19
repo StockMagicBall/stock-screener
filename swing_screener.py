@@ -133,19 +133,28 @@ def get_institutional_context(ticker: str) -> dict:
 
 def get_current_price(ticker: str) -> dict:
     """
-    Current price for a ticker, aware of pre-market/after-hours for US stocks
-    and always-on trading for crypto (tickers ending in -USD).
+    Current price for a ticker, returning REGULAR-session and extended-hours
+    (pre-market/after-hours) prices SEPARATELY, since they can differ
+    meaningfully and collapsing them into one number hides that. Crypto
+    (tickers ending in -USD) trades continuously, so there's no separate
+    extended-hours price -- just one always-current number.
 
     Returns a dict with:
-        price        -- the most current price available
-        market_state -- 'REGULAR', 'PRE', 'POST', 'CRYPTO', or 'CLOSED (last close)'
-        error        -- set only if every fallback failed and price is None
+        regular_price   -- last regular-session price (or last close if
+                            markets are fully closed and this isn't crypto)
+        extended_price  -- pre-market or after-hours price, only populated
+                            during those windows; None otherwise
+        extended_label  -- 'PRE', 'POST', or None
+        is_24h          -- True for crypto tickers
+        price           -- the single most-current number (extended_price
+                            if available, else regular_price) -- convenience
+                            field for P&L calculations
+        market_state    -- human-readable label for what 'price' reflects
+        error           -- set only if every fallback failed and price is None
 
     Tries fast_info first (lighter, more reliable), then .info for pre/post
-    market refinement, then the last daily close -- so a single failed call
-    doesn't blank out the whole result the way relying on just one endpoint
-    would. Yahoo's .info endpoint in particular is prone to failing or being
-    rate-limited; fast_info is a lighter, more dependable baseline.
+    market detail, then the last daily close -- so a single failed call
+    doesn't blank out the whole result.
 
     IMPORTANT: pre-market/after-hours prices reflect thin, less reliable
     trading volume compared to regular session prices -- treat them as
@@ -154,7 +163,9 @@ def get_current_price(ticker: str) -> dict:
     try:
         import yfinance as yf
     except ImportError:
-        return {"price": None, "market_state": None, "error": "yfinance not installed"}
+        return {"price": None, "regular_price": None, "extended_price": None,
+                "extended_label": None, "is_24h": False, "market_state": None,
+                "error": "yfinance not installed"}
 
     ticker = ticker.strip().upper()
     is_crypto = ticker.endswith("-USD")
@@ -173,39 +184,67 @@ def get_current_price(ticker: str) -> dict:
 
     if is_crypto:
         if baseline_price is not None:
-            return {"price": baseline_price, "market_state": "CRYPTO", "error": None}
+            return {
+                "price": baseline_price, "regular_price": baseline_price,
+                "extended_price": None, "extended_label": None, "is_24h": True,
+                "market_state": "CRYPTO", "error": None,
+            }
         # fast_info failed for crypto -- fall through to the last-close fallback below
     else:
-        # Layer 2: .info -- heavier call, but gives pre/post-market granularity
+        # Layer 2: .info -- heavier call, gives pre/post-market detail
         try:
             info = yf.Ticker(ticker).info or {}
-            state = info.get("marketState", "")
+            state = (info.get("marketState") or "").strip()
             post_price = info.get("postMarketPrice")
             pre_price = info.get("preMarketPrice")
             regular_price = info.get("regularMarketPrice") or info.get("currentPrice")
+            if regular_price is None:
+                regular_price = baseline_price
 
+            extended_price, extended_label = None, None
             if state == "POST" and post_price is not None:
-                return {"price": float(post_price), "market_state": "POST", "error": None}
-            if state == "PRE" and pre_price is not None:
-                return {"price": float(pre_price), "market_state": "PRE", "error": None}
+                extended_price, extended_label = float(post_price), "POST"
+            elif state == "PRE" and pre_price is not None:
+                extended_price, extended_label = float(pre_price), "PRE"
+
             if regular_price is not None:
-                return {"price": float(regular_price), "market_state": state or "REGULAR", "error": None}
+                current = extended_price if extended_price is not None else float(regular_price)
+                return {
+                    "price": current, "regular_price": float(regular_price),
+                    "extended_price": extended_price, "extended_label": extended_label,
+                    "is_24h": False,
+                    "market_state": extended_label or state or "REGULAR",
+                    "error": None,
+                }
         except Exception as e:
             last_error = f".info failed: {e}"
 
         # Layer 2 didn't return -- fall back to the fast_info baseline if we have one
         if baseline_price is not None:
-            return {"price": baseline_price, "market_state": "REGULAR (approx)", "error": None}
+            return {
+                "price": baseline_price, "regular_price": baseline_price,
+                "extended_price": None, "extended_label": None, "is_24h": False,
+                "market_state": "REGULAR (approx)", "error": None,
+            }
 
     # Final fallback for both crypto and stocks: most recent daily close
     try:
         df = fetch_history(ticker, period="5d")
         if df is not None and not df.empty:
-            return {"price": float(df["close"].iloc[-1]), "market_state": "CLOSED (last close)", "error": None}
+            close = float(df["close"].iloc[-1])
+            return {
+                "price": close, "regular_price": close, "extended_price": None,
+                "extended_label": None, "is_24h": is_crypto,
+                "market_state": "CLOSED (last close)", "error": None,
+            }
     except Exception as e:
         last_error = f"history fallback failed: {e}"
 
-    return {"price": None, "market_state": None, "error": last_error or "no price data available"}
+    return {
+        "price": None, "regular_price": None, "extended_price": None,
+        "extended_label": None, "is_24h": is_crypto, "market_state": None,
+        "error": last_error or "no price data available",
+    }
 
 
 # ---------------------------------------------------------------------------
