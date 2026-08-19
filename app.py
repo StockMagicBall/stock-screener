@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 
 from swing_screener import run_screen
-from strategy import simulate_portfolio, get_todays_signals
+from strategy import simulate_portfolio, simulate_buy_and_hold, get_todays_signals
 
 st.set_page_config(page_title="Swing Screener", layout="wide")
 st.title("📈 Swing / Day-Trade Screener")
@@ -142,6 +142,52 @@ with tab_strategy:
                 "Reminder: perfect fills assumed at the stop/exit price, flat cost estimate. "
                 "Real slippage and execution timing will make live results worse than this, not better."
             )
+
+            # --- Buy-and-hold benchmark comparison ---
+            st.divider()
+            st.subheader("vs. Buy-and-Hold Benchmark")
+            st.caption(
+                "The question that matters most: does the strategy's extra complexity and "
+                "risk actually beat just buying and holding the same tickers?"
+            )
+            with st.spinner("Computing buy-and-hold benchmark..."):
+                bh = simulate_buy_and_hold(tickers, period=strat_period, starting_capital=starting_capital)
+
+            if bh["summary"]:
+                bh_summary = bh["summary"]
+                bcol = st.columns(3)
+                bcol[0].metric(
+                    "Strategy total return", f"{summary['total_return_pct']}%",
+                    delta=f"{round(summary['total_return_pct'] - bh_summary['total_return_pct'], 1)}pp vs buy-and-hold",
+                )
+                bcol[1].metric("Buy-and-hold total return", f"{bh_summary['total_return_pct']}%")
+                bcol[2].metric(
+                    "Strategy drawdown vs buy-and-hold",
+                    f"{summary['max_drawdown_pct']}%",
+                    delta=f"{round(summary['max_drawdown_pct'] - bh_summary['max_drawdown_pct'], 1)}pp",
+                    delta_color="inverse",
+                )
+
+                strat_eq = equity_df.set_index("date")["equity"].rename("Strategy")
+                bh_eq = bh["equity_curve"].set_index("date")["equity"].rename("Buy & Hold")
+                combined = pd.concat([strat_eq, bh_eq], axis=1).dropna()
+                st.line_chart(combined, height=300)
+
+                if summary["total_return_pct"] > bh_summary["total_return_pct"]:
+                    st.success(
+                        f"The strategy outperformed buy-and-hold by "
+                        f"{round(summary['total_return_pct'] - bh_summary['total_return_pct'], 1)} percentage points "
+                        f"over this period — though check whether the lower/higher drawdown justifies the added complexity."
+                    )
+                else:
+                    st.warning(
+                        f"Buy-and-hold actually outperformed the strategy by "
+                        f"{round(bh_summary['total_return_pct'] - summary['total_return_pct'], 1)} percentage points "
+                        f"over this period. Unless the strategy's drawdown is meaningfully better, simply holding "
+                        f"these tickers would have been the better — and far simpler — choice."
+                    )
+            else:
+                st.info("Could not compute benchmark for these tickers.")
 
 # ---------------------------------------------------------------------------
 # Tab 3: today's live signals
