@@ -69,6 +69,68 @@ def fetch_history(
     return df[list(required)].dropna()
 
 
+def get_news_sentiment(ticker: str, max_headlines: int = 10) -> dict:
+    """
+    Pulls recent news headlines for a ticker (via yfinance) and scores their
+    sentiment. This is a noisy, backward-looking signal -- headlines often
+    lag or simply describe a price move that already happened, rather than
+    predicting the next one. Treat as context, not a trading trigger.
+    """
+    try:
+        import yfinance as yf
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    except ImportError:
+        return {"avg_sentiment": None, "headline_count": 0, "headlines": [],
+                "error": "vaderSentiment not installed -- run: pip install vaderSentiment"}
+
+    try:
+        news = yf.Ticker(ticker).news or []
+    except Exception:
+        news = []
+
+    analyzer = SentimentIntensityAnalyzer()
+    scored = []
+    for item in news[:max_headlines]:
+        title = item.get("content", {}).get("title") or item.get("title")
+        if not title:
+            continue
+        compound = analyzer.polarity_scores(title)["compound"]
+        scored.append({"headline": title, "sentiment": round(compound, 3)})
+
+    if not scored:
+        return {"avg_sentiment": None, "headline_count": 0, "headlines": []}
+
+    avg = sum(s["sentiment"] for s in scored) / len(scored)
+    return {"avg_sentiment": round(avg, 3), "headline_count": len(scored), "headlines": scored}
+
+
+def get_institutional_context(ticker: str) -> dict:
+    """
+    Institutional ownership snapshot (from 13F-derived data yfinance surfaces).
+    IMPORTANT: 13F filings are quarterly and filed up to 45 days after quarter
+    end -- this can be up to ~4 months stale, and shows POSITION SIZE, not
+    recent buying/selling activity. Useful as background context on who holds
+    a stock, not as a timing signal for entries.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        return {"pct_institutions": None, "num_holders": None, "error": "yfinance not installed"}
+
+    try:
+        info = yf.Ticker(ticker).info
+        pct = info.get("heldPercentInstitutions")
+        holders = yf.Ticker(ticker).institutional_holders
+        num_holders = len(holders) if holders is not None else None
+    except Exception:
+        pct, num_holders = None, None
+
+    return {
+        "pct_institutions": round(pct * 100, 1) if pct is not None else None,
+        "num_top_holders_reported": num_holders,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Indicators
 # ---------------------------------------------------------------------------
