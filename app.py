@@ -674,12 +674,12 @@ with tab_journal:
                     if info.get("error"):
                         fetch_errors[row["ticker"]] = info["error"]
 
-            display_df["regular_price"] = regular_prices
-            display_df["extended_price"] = extended_prices
-            display_df["extended_session"] = extended_labels
-            display_df["market_value"] = market_values
-            display_df["unrealized_pnl"] = unrealized_pnls
-            display_df["unrealized_pnl_pct"] = unrealized_pcts
+            display_df["regular_price"] = pd.to_numeric(pd.Series(regular_prices), errors="coerce")
+            display_df["extended_price"] = pd.to_numeric(pd.Series(extended_prices), errors="coerce")
+            display_df["extended_session"] = pd.Series(extended_labels).fillna("")
+            display_df["market_value"] = pd.to_numeric(pd.Series(market_values), errors="coerce")
+            display_df["unrealized_pnl"] = pd.to_numeric(pd.Series(unrealized_pnls), errors="coerce")
+            display_df["unrealized_pnl_pct"] = pd.to_numeric(pd.Series(unrealized_pcts), errors="coerce")
 
             if fetch_errors:
                 st.warning(
