@@ -1,6 +1,3 @@
-# strategy.py
-
-```python
 """
 Directional strategy layer on top of the screener's movement score.
 
@@ -409,4 +406,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
