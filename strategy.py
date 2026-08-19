@@ -135,6 +135,8 @@ def summarize_trades(trades: pd.DataFrame) -> dict:
 def simulate_portfolio(
     tickers: list,
     period: str = "3y",
+    start: str = None,
+    end: str = None,
     score_quantile: float = 0.8,
     max_holding_days: int = 20,
     cost_bps: float = 10.0,
@@ -155,6 +157,10 @@ def simulate_portfolio(
         an exit after a fixed number of days)
       - trend reversal (price/MACD trend filter turns off, if trend_exit=True)
       - max_holding_days safety cap, in case none of the above ever fires
+
+    Pass start (and optionally end) as "YYYY-MM-DD" to backtest a specific
+    historical window (e.g. start="2022-01-01", end="2022-12-31") instead
+    of the rolling `period` window.
     """
     ticker_data = {}
     ticker_direction = {}
@@ -162,7 +168,7 @@ def simulate_portfolio(
 
     for t in tickers:
         t = t.strip().upper()
-        df = fetch_history(t, period=period)
+        df = fetch_history(t, period=period, start=start, end=end)
         if df is None or len(df) < 100:
             continue
         ticker_data[t] = df
@@ -335,7 +341,10 @@ def simulate_portfolio(
     return {"trades": trades, "equity_curve": equity_df, "summary": summary, "skipped": skipped}
 
 
-def simulate_buy_and_hold(tickers: list, period: str = "3y", starting_capital: float = 10000.0) -> dict:
+def simulate_buy_and_hold(
+    tickers: list, period: str = "3y", start: str = None, end: str = None,
+    starting_capital: float = 10000.0,
+) -> dict:
     """
     Equal-weight buy-and-hold benchmark: split starting_capital evenly across
     tickers on day 1, hold to the end, no trading. This is the baseline any
@@ -346,7 +355,7 @@ def simulate_buy_and_hold(tickers: list, period: str = "3y", starting_capital: f
 
     value_series = {}
     for t in tickers:
-        df = fetch_history(t, period=period)
+        df = fetch_history(t, period=period, start=start, end=end)
         if df is None or len(df) < 2:
             continue
         shares = per_ticker_capital / df["close"].iloc[0]
