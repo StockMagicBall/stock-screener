@@ -156,8 +156,8 @@ def style_signal(df: pd.DataFrame, col: str = "signal"):
     return df.style.apply(_row, axis=1) if col in df.columns else df
 
 
-tab_screen, tab_strategy, tab_today = st.tabs(
-    ["🔍 Screener", "🧪 Strategy Backtest", "🎯 Today's Signals"]
+tab_screen, tab_strategy, tab_today, tab_track = st.tabs(
+    ["🔍 Screener", "🧪 Strategy Backtest", "🎯 Today's Signals", "📊 Track Record"]
 )
 
 # ---------------------------------------------------------------------------
@@ -427,4 +427,62 @@ with tab_today:
                 "follow-through, not just a one-day flicker. 'AWAITING CONFIRMATION' means the setup "
                 "fired but hasn't proven itself yet. Neither is a recommendation to buy -- confirm with "
                 "your own research."
+            )
+
+# ---------------------------------------------------------------------------
+# Tab 4: live, out-of-sample track record
+# ---------------------------------------------------------------------------
+with tab_track:
+    st.subheader("Live track record")
+    st.caption(
+        "Every confirmed LONG SETUP gets logged automatically by the daily scheduled check, "
+        "then scored ~10 trading days later against what actually happened. Unlike every other "
+        "tab here, this data is genuinely out-of-sample -- it didn't exist when the signal fired. "
+        "This is the real test of whether the system works, not a backtest."
+    )
+
+    import os
+    log_path = "signal_log.csv"
+    if not os.path.exists(log_path):
+        st.info(
+            "No track record yet -- this file is created automatically the first time the "
+            "scheduled GitHub Action logs a confirmed signal. Check back after it's run a few times."
+        )
+    else:
+        log_df = pd.read_csv(log_path)
+        if log_df.empty:
+            st.info("Log file exists but is empty -- no confirmed signals logged yet.")
+        else:
+            resolved = log_df[log_df["outcome"].isin(["win", "loss"])]
+            pending = log_df[log_df["outcome"] == "pending"]
+
+            cols = st.columns(4)
+            cols[0].metric("Total logged", len(log_df))
+            cols[1].metric("Resolved", len(resolved))
+            cols[2].metric("Pending", len(pending))
+            if not resolved.empty:
+                win_rate = (resolved["outcome"] == "win").mean() * 100
+                cols[3].metric("Live win rate", f"{win_rate:.1f}%")
+            else:
+                cols[3].metric("Live win rate", "—")
+
+            if not resolved.empty:
+                avg_return = resolved["realized_return_pct"].mean()
+                st.metric("Avg realized return (resolved trades)", f"{avg_return:.2f}%")
+                if len(resolved) < 20:
+                    st.warning(
+                        f"Only {len(resolved)} resolved signal(s) so far -- far too small a sample "
+                        "to draw real conclusions. Treat these numbers as provisional until this "
+                        "grows to at least 30-50 resolved trades."
+                    )
+
+            st.dataframe(
+                style_pnl(log_df, "realized_return_pct") if "realized_return_pct" in log_df.columns else log_df,
+                use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                "'entry_price' is the price observed when the signal was logged, not a guaranteed "
+                "fill. Results are evaluated a fixed ~10 trading days later, regardless of what the "
+                "strategy's own trailing-stop/trend-exit rules would have done -- this is a simpler, "
+                "more transparent test of the raw signal, not the full trading strategy."
             )
