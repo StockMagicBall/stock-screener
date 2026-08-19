@@ -41,6 +41,14 @@ st.markdown(
     }
     h2, h3 { color: #F5F3FF !important; font-weight: 700 !important; }
 
+    /* Body text + captions -- default Streamlit gray is unreadable on this background */
+    p, li, label, .stMarkdown, [data-testid="stCaptionContainer"] {
+        color: #D8D3E8 !important;
+    }
+    [data-testid="stCaptionContainer"] p {
+        color: #A79FC4 !important; /* still muted, but readable */
+    }
+
     [data-testid="stMetricValue"], .stDataFrame, code {
         font-family: 'JetBrains Mono', monospace !important;
     }
