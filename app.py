@@ -228,12 +228,25 @@ with tab_today:
         key="today_tickers",
     )
     today_quantile = st.slider("Score threshold (percentile)", 0.5, 0.95, 0.8, step=0.05, key="today_q")
+    show_context = st.checkbox(
+        "Also pull news sentiment + institutional ownership for flagged tickers",
+        value=False, key="show_context",
+    )
+    if show_context:
+        st.caption(
+            "News sentiment is scored from recent headlines and is noisy/backward-looking — "
+            "it often reflects a move that already happened rather than predicting the next one. "
+            "Institutional ownership comes from 13F filings, which can be up to ~4 months stale and "
+            "shows position size, not recent buying or selling. Both are context, not entry signals."
+        )
 
     if st.button("Check Today's Signals", type="primary", key="run_today"):
         raw = today_tickers_input.replace(",", "\n")
         tickers = [t.strip().upper() for t in raw.splitlines() if t.strip()]
         with st.spinner("Checking latest data..."):
-            signals = get_todays_signals(tickers, score_quantile=today_quantile)
+            signals = get_todays_signals(
+                tickers, score_quantile=today_quantile, include_context=show_context,
+            )
 
         if signals.empty:
             st.error("No data returned — check your tickers.")
