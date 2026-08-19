@@ -652,6 +652,7 @@ with tab_journal:
 
             display_df = open_trades.drop(columns=["exit_date", "exit_price", "realized_pnl", "realized_pnl_pct"]).copy()
             current_prices, market_states, market_values, unrealized_pnls, unrealized_pcts = [], [], [], [], []
+            fetch_errors = {}
             for _, row in display_df.iterrows():
                 info = price_cache.get(row["ticker"], {})
                 price = info.get("price")
@@ -669,12 +670,20 @@ with tab_journal:
                     market_values.append(None)
                     unrealized_pnls.append(None)
                     unrealized_pcts.append(None)
+                    if info.get("error"):
+                        fetch_errors[row["ticker"]] = info["error"]
 
             display_df["current_price"] = current_prices
             display_df["market_state"] = market_states
             display_df["market_value"] = market_values
             display_df["unrealized_pnl"] = unrealized_pnls
             display_df["unrealized_pnl_pct"] = unrealized_pcts
+
+            if fetch_errors:
+                st.warning(
+                    "Couldn't fetch a live price for: " +
+                    ", ".join(f"{t} ({e})" for t, e in fetch_errors.items())
+                )
 
             st.dataframe(
                 style_pnl(display_df, "unrealized_pnl_pct"), use_container_width=True, hide_index=True,
