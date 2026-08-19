@@ -143,7 +143,12 @@ def style_pnl(df: pd.DataFrame, pct_col: str = "net_return_pct"):
             return ""
         color = "#B4FF39" if val > 0 else ("#FF4D6D" if val < 0 else "#9891A8")
         return f"color: {color}; font-weight: 700;"
-    return df.style.map(_color, subset=[pct_col]) if pct_col in df.columns else df
+    if pct_col not in df.columns:
+        return df
+    # na_rep="" makes empty/missing cells render blank instead of pandas'
+    # default "nan" text -- without this, every NaN in the table (not just
+    # the styled column) shows up as literal text instead of an empty cell.
+    return df.style.map(_color, subset=[pct_col]).format(na_rep="", precision=2)
 
 
 def style_signal(df: pd.DataFrame, col: str = "signal"):
