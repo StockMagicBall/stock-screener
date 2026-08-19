@@ -33,8 +33,15 @@ warnings.filterwarnings("ignore")
 # Data fetching
 # ---------------------------------------------------------------------------
 
-def fetch_history(ticker: str, period: str = "6mo") -> pd.DataFrame | None:
-    """Fetch daily OHLCV data for a single ticker via yfinance."""
+def fetch_history(
+    ticker: str, period: str = "6mo", start: str = None, end: str = None
+) -> pd.DataFrame | None:
+    """
+    Fetch daily OHLCV data for a single ticker via yfinance.
+    If start (and optionally end) is given, fetches that explicit date range
+    instead of the rolling `period` window -- e.g. start="2022-01-01",
+    end="2022-12-31" to backtest a specific historical stretch.
+    """
     try:
         import yfinance as yf
     except ImportError:
@@ -42,7 +49,12 @@ def fetch_history(ticker: str, period: str = "6mo") -> pd.DataFrame | None:
             "yfinance is not installed. Run: pip install yfinance pandas numpy"
         )
 
-    df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=False)
+    if start:
+        df = yf.download(
+            ticker, start=start, end=end, interval="1d", progress=False, auto_adjust=False
+        )
+    else:
+        df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=False)
     if df is None or df.empty or len(df) < 30:
         return None
 
