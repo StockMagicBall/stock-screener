@@ -97,7 +97,7 @@ st.markdown(
     }
     .ticker-tape {
         display: inline-block; padding-left: 100%;
-        animation: ticker-scroll 30s linear infinite;
+        animation: ticker-scroll var(--ticker-duration, 30s) linear infinite;
         font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: #C9C4DA;
     }
     .ticker-tape span { margin-right: 2.5rem; }
@@ -117,7 +117,14 @@ _tape_html = "".join(
     f'<span><span class="dot" style="color:{_dot_colors[i % 4]}">●</span>{t}</span>'
     for i, t in enumerate(TICKER_TAPE * 3)
 )
-st.markdown(f'<div class="ticker-tape-wrap"><div class="ticker-tape">{_tape_html}</div></div>', unsafe_allow_html=True)
+# Scroll speed scales with ticker count so it stays calm and readable no matter
+# how many tickers are added later -- roughly 3.5 seconds of travel per ticker.
+_tape_duration = max(30, len(TICKER_TAPE) * 3.5)
+st.markdown(
+    f'<div class="ticker-tape-wrap"><div class="ticker-tape" '
+    f'style="--ticker-duration: {_tape_duration}s;">{_tape_html}</div></div>',
+    unsafe_allow_html=True,
+)
 
 st.title("📈 Swing / Day-Trade Screener")
 st.caption(
@@ -413,8 +420,11 @@ with tab_today:
 
             st.dataframe(style_signal(signals, "signal"), use_container_width=True, hide_index=True)
             st.caption(
-                "'LONG SETUP (confirmed)' means: movement score above your threshold, price trending "
-                "up, AND price has already closed above the signal day's high — real follow-through, "
-                "not just a one-day flicker. 'AWAITING CONFIRMATION' means the setup fired but hasn't "
-                "proven itself yet. Neither is a recommendation to buy — confirm with your own research."
+                "'score' is the score FROM THE DAY THE SIGNAL FIRED (this is what actually triggered "
+                "it) -- 'today_score' is today's score, which can drift well below that by the time a "
+                "setup confirms. 'LONG SETUP (confirmed)' means: movement score above threshold, price "
+                "trending up, AND price has already closed above the signal day's high -- real "
+                "follow-through, not just a one-day flicker. 'AWAITING CONFIRMATION' means the setup "
+                "fired but hasn't proven itself yet. Neither is a recommendation to buy -- confirm with "
+                "your own research."
             )
