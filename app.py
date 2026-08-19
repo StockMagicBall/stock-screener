@@ -9,8 +9,7 @@ import streamlit as st
 import pandas as pd
 
 from swing_screener import run_screen
-from strategy import simulate_trades, summarize_trades, get_todays_signals
-from swing_screener import fetch_history
+from strategy import simulate_portfolio, get_todays_signals
 
 st.set_page_config(page_title="Swing Screener", layout="wide")
 st.title("📈 Swing / Day-Trade Screener")
@@ -73,12 +72,12 @@ with tab_screen:
 with tab_strategy:
     st.subheader("Backtest the directional strategy")
     st.caption(
-        "Combines the movement score with a trend filter (price vs 50-day average + "
-        "MACD) into long-only entries, then simulates trades: enter next day's open, "
-        "hold N days, exit at close, minus an estimated round-trip cost."
+        "Portfolio-level simulation: a fixed number of position slots share a real "
+        "capital pool (so simultaneous signals can't each claim 100%), and every "
+        "position exits early if it drops past your stop-loss."
     )
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         strat_tickers_input = st.text_area(
             "Tickers to backtest",
@@ -88,34 +87,31 @@ with tab_strategy:
         )
         strat_period = st.selectbox("History window", ["1y", "2y", "3y", "5y"], index=2, key="strategy_period")
     with col2:
-        holding_days = st.slider("Holding period (trading days)", 1, 10, 3, key="holding_days")
+        holding_days = st.slider("Max holding period (trading days)", 1, 10, 3, key="holding_days")
         score_quantile = st.slider("Score threshold (percentile)", 0.5, 0.95, 0.8, step=0.05, key="score_q")
         cost_bps = st.number_input("Round-trip cost (bps)", min_value=0.0, value=10.0, step=1.0, key="cost_bps")
+    with col3:
+        stop_loss_pct = st.slider("Stop-loss (%)", 1.0, 15.0, 5.0, step=0.5, key="stop_loss")
+        max_concurrent = st.slider("Max concurrent positions", 1, 10, 5, key="max_concurrent")
+        starting_capital = st.number_input("Starting capital ($)", min_value=1000, value=10000, step=1000, key="capital")
 
     if st.button("Run Strategy Backtest", type="primary", key="run_strategy"):
         raw = strat_tickers_input.replace(",", "\n")
         tickers = [t.strip().upper() for t in raw.splitlines() if t.strip()]
 
-        all_trades = []
-        progress = st.progress(0.0, text="Backtesting...")
-        for i, t in enumerate(tickers):
-            df = fetch_history(t, period=strat_period)
-            if df is not None and len(df) >= 100:
-                trades = simulate_trades(
-                    df, t, score_quantile=score_quantile,
-                    holding_days=holding_days, cost_bps=cost_bps,
-                )
-                if not trades.empty:
-                    all_trades.append(trades)
-            progress.progress((i + 1) / len(tickers))
-        progress.empty()
+        with st.spinner("Simulating portfolio..."):
+            result = simulate_portfolio(
+                tickers, period=strat_period, score_quantile=score_quantile,
+                holding_days=holding_days, cost_bps=cost_bps,
+                stop_loss_pct=stop_loss_pct, starting_capital=starting_capital,
+                max_concurrent=max_concurrent,
+            )
 
-        if not all_trades:
+        trades, equity_df, summary = result["trades"], result["equity_curve"], result["summary"]
+
+        if trades.empty:
             st.error("No trades generated — try a longer period or lower score threshold.")
         else:
-            trades = pd.concat(all_trades, ignore_index=True).sort_values("signal_date")
-            summary = summarize_trades(trades)
-
             st.subheader("Results")
             cols = st.columns(4)
             cols[0].metric("Total trades", summary["total_trades"])
@@ -124,29 +120,27 @@ with tab_strategy:
             cols[3].metric("Max drawdown", f"{summary['max_drawdown_pct']}%")
 
             cols2 = st.columns(4)
-            cols2[0].metric("Avg return/trade", f"{summary['avg_return_per_trade_pct']}%")
-            cols2[1].metric("Avg win", f"{summary['avg_win_pct']}%")
-            cols2[2].metric("Avg loss", f"{summary['avg_loss_pct']}%")
-            cols2[3].metric("Cumulative return", f"{summary['cumulative_return_pct']}%")
+            cols2[0].metric("Total return", f"{summary['total_return_pct']}%")
+            cols2[1].metric("Final equity", f"${summary['final_equity']:,.0f}")
+            cols2[2].metric("Stopped out", f"{summary['stopped_out_pct']}% of trades")
+            cols2[3].metric("Skipped (no free slot)", summary["trades_skipped_capacity"])
 
             if summary["profit_factor"] > 2.5:
                 st.warning(
                     "Profit factor above 2.5 on a simple rules-based strategy is unusually "
-                    "high — treat this as a sign of overfitting to this specific sample "
-                    "rather than a strategy you should trust at face value."
+                    "high — treat this as a sign of overfitting rather than a strategy to trust outright."
                 )
 
-            equity = (1 + trades["net_return_pct"] / 100).cumprod()
-            st.line_chart(equity.reset_index(drop=True), height=250)
-            st.caption("Simulated equity curve (sequential trades, not compounded across overlapping positions)")
+            st.line_chart(equity_df.set_index("date")["equity"], height=250)
+            st.caption("Real portfolio equity curve — capital shared across concurrent positions, stop-losses applied.")
 
             st.dataframe(trades, use_container_width=True, hide_index=True)
             csv = trades.to_csv(index=False).encode("utf-8")
             st.download_button("Download trade log as CSV", data=csv, file_name="strategy_trades.csv", mime="text/csv")
 
             st.caption(
-                "Reminder: perfect fills assumed, flat cost estimate. Real slippage and "
-                "execution timing will make live results worse than this, not better."
+                "Reminder: perfect fills assumed at the stop/exit price, flat cost estimate. "
+                "Real slippage and execution timing will make live results worse than this, not better."
             )
 
 # ---------------------------------------------------------------------------
