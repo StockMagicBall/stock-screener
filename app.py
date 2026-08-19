@@ -141,8 +141,10 @@ def style_pnl(df: pd.DataFrame, pct_col: str = "net_return_pct"):
 def style_signal(df: pd.DataFrame, col: str = "signal"):
     """Highlight rows that meet the entry criteria with a gradient glow tint."""
     def _row(row):
-        if col in row and row[col] == "LONG SETUP":
+        if col in row and row[col] in ("LONG SETUP", "LONG SETUP (confirmed)"):
             return ["background: linear-gradient(90deg, rgba(139,92,246,0.16), rgba(255,62,165,0.10)); font-weight: 700;"] * len(row)
+        if col in row and row[col] == "AWAITING CONFIRMATION":
+            return ["background: rgba(240, 200, 60, 0.08);"] * len(row)
         return [""] * len(row)
     return df.style.apply(_row, axis=1) if col in df.columns else df
 
@@ -234,6 +236,19 @@ with tab_strategy:
         max_concurrent = st.slider("Max concurrent positions", 1, 10, 5, key="max_concurrent")
         starting_capital = st.number_input("Starting capital ($)", min_value=1000, value=10000, step=1000, key="capital")
         cost_bps = st.number_input("Round-trip cost (bps)", min_value=0.0, value=10.0, step=1.0, key="cost_bps")
+        require_confirmation = st.checkbox(
+            "Require breakout confirmation before entry", value=True, key="require_confirmation",
+        )
+        confirm_window_days = st.slider(
+            "Confirmation window (days)", 1, 10, 3, key="confirm_window",
+            disabled=not require_confirmation,
+        )
+        if require_confirmation:
+            st.caption(
+                "A signal only trades once price closes above the signal day's high within "
+                "this window — filters out breakouts that immediately fail, at the cost of "
+                "entering a bit later and missing a few real ones too."
+            )
 
     if st.button("Run Strategy Backtest", type="primary", key="run_strategy"):
         raw = strat_tickers_input.replace(",", "\n")
@@ -249,6 +264,7 @@ with tab_strategy:
                 stop_loss_pct=stop_loss_pct, trailing_stop_pct=trailing_stop_pct,
                 trend_exit=trend_exit, starting_capital=starting_capital,
                 max_concurrent=max_concurrent,
+                require_confirmation=require_confirmation, confirm_window_days=confirm_window_days,
             )
 
         trades, equity_df, summary = result["trades"], result["equity_curve"], result["summary"]
@@ -355,6 +371,13 @@ with tab_today:
         key="today_tickers",
     )
     today_quantile = st.slider("Score threshold (percentile)", 0.5, 0.95, 0.8, step=0.05, key="today_q")
+    today_require_confirmation = st.checkbox(
+        "Require breakout confirmation", value=True, key="today_require_confirmation",
+    )
+    today_confirm_window = st.slider(
+        "Confirmation window (days)", 1, 10, 3, key="today_confirm_window",
+        disabled=not today_require_confirmation,
+    )
     show_context = st.checkbox(
         "Also pull news sentiment + institutional ownership for flagged tickers",
         value=False, key="show_context",
@@ -373,20 +396,25 @@ with tab_today:
         with st.spinner("Checking latest data..."):
             signals = get_todays_signals(
                 tickers, score_quantile=today_quantile, include_context=show_context,
+                require_confirmation=today_require_confirmation, confirm_window_days=today_confirm_window,
             )
 
         if signals.empty:
             st.error("No data returned — check your tickers.")
         else:
-            flagged = signals[signals["signal"] == "LONG SETUP"]
-            if not flagged.empty:
-                st.success(f"{len(flagged)} ticker(s) currently meet the strategy's entry criteria")
+            confirmed = signals[signals["signal"].isin(["LONG SETUP", "LONG SETUP (confirmed)"])]
+            awaiting = signals[signals["signal"] == "AWAITING CONFIRMATION"]
+            if not confirmed.empty:
+                st.success(f"{len(confirmed)} ticker(s) confirmed and meet the strategy's entry criteria")
+            elif not awaiting.empty:
+                st.info(f"{len(awaiting)} ticker(s) have a raw signal but haven't confirmed yet — not actionable until they do.")
             else:
                 st.info("No tickers currently meet the strategy's entry criteria — that's normal, and better than false positives.")
 
             st.dataframe(style_signal(signals, "signal"), use_container_width=True, hide_index=True)
             st.caption(
-                "A 'LONG SETUP' here means: movement score above your threshold AND price "
-                "trending up (above 50-day average, MACD bullish) as of the most recent close. "
-                "It is not a recommendation to buy — confirm with your own research."
+                "'LONG SETUP (confirmed)' means: movement score above your threshold, price trending "
+                "up, AND price has already closed above the signal day's high — real follow-through, "
+                "not just a one-day flicker. 'AWAITING CONFIRMATION' means the setup fired but hasn't "
+                "proven itself yet. Neither is a recommendation to buy — confirm with your own research."
             )
