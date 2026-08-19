@@ -385,8 +385,19 @@ def simulate_buy_and_hold(
     return {"equity_curve": equity_df, "summary": summary}
 
 
-def get_todays_signals(tickers: list, period: str = "1y", score_quantile: float = 0.8) -> pd.DataFrame:
-    """What the strategy would flag RIGHT NOW, for each ticker's most recent day."""
+def get_todays_signals(
+    tickers: list, period: str = "1y", score_quantile: float = 0.8,
+    include_context: bool = False,
+) -> pd.DataFrame:
+    """
+    What the strategy would flag RIGHT NOW, for each ticker's most recent day.
+    If include_context=True, also pulls news sentiment and institutional
+    ownership for signal-worthy tickers -- these are DISPLAY CONTEXT ONLY,
+    not part of the entry criteria, since sentiment is noisy/lagging and
+    institutional data is quarterly and stale.
+    """
+    from swing_screener import get_news_sentiment, get_institutional_context
+
     rows = []
     for t in tickers:
         t = t.strip().upper()
@@ -406,16 +417,23 @@ def get_todays_signals(tickers: list, period: str = "1y", score_quantile: float 
         d = direction.iloc[last]
         signal = "LONG SETUP" if (pd.notna(s) and s >= threshold and d == "bullish") else "no signal"
 
-        rows.append(
-            {
-                "ticker": t,
-                "close": round(float(df["close"].iloc[last]), 2),
-                "score": round(float(s), 1) if pd.notna(s) else None,
-                "score_threshold": round(float(threshold), 1),
-                "direction": d,
-                "signal": signal,
-            }
-        )
+        row = {
+            "ticker": t,
+            "close": round(float(df["close"].iloc[last]), 2),
+            "score": round(float(s), 1) if pd.notna(s) else None,
+            "score_threshold": round(float(threshold), 1),
+            "direction": d,
+            "signal": signal,
+        }
+
+        if include_context and signal == "LONG SETUP":
+            news = get_news_sentiment(t)
+            inst = get_institutional_context(t)
+            row["news_sentiment"] = news.get("avg_sentiment")
+            row["news_headlines_checked"] = news.get("headline_count")
+            row["pct_institutional_ownership"] = inst.get("pct_institutions")
+
+        rows.append(row)
     out = pd.DataFrame(rows)
     if not out.empty:
         out = out.sort_values("score", ascending=False).reset_index(drop=True)
