@@ -26,30 +26,13 @@ st.markdown(
     html, body, [class*="css"] { font-family: 'Manrope', sans-serif; }
 
     .stApp {
-        background: #0B0710;
-        position: relative;
-        overflow-x: hidden;
-    }
-    /* Aurora glow backdrop -- the signature element */
-    .stApp::before {
-        content: "";
-        position: fixed; inset: -20%;
         background:
-            radial-gradient(40% 35% at 15% 20%, rgba(139,92,246,0.30), transparent 70%),
-            radial-gradient(35% 30% at 85% 15%, rgba(255,62,165,0.24), transparent 70%),
-            radial-gradient(45% 40% at 50% 90%, rgba(34,211,238,0.18), transparent 70%);
-        filter: blur(60px);
-        animation: aurora-drift 26s ease-in-out infinite alternate;
-        z-index: 0; pointer-events: none;
+            radial-gradient(60% 50% at 15% 10%, rgba(139,92,246,0.18), transparent 60%),
+            radial-gradient(50% 45% at 85% 0%, rgba(255,62,165,0.14), transparent 60%),
+            radial-gradient(55% 50% at 50% 100%, rgba(34,211,238,0.10), transparent 60%),
+            #0B0710;
     }
-    @keyframes aurora-drift {
-        0%   { transform: translate(0, 0) scale(1); }
-        100% { transform: translate(3%, -4%) scale(1.08); }
-    }
-    @media (prefers-reduced-motion: reduce) { .stApp::before { animation: none; } }
-    .block-container { position: relative; z-index: 1; }
 
-    /* Headers -- bold, chunky, gradient */
     h1, h2, h3 { font-family: 'Unbounded', sans-serif !important; letter-spacing: -0.01em; }
     h1 {
         background: linear-gradient(90deg, #8B5CF6 0%, #FF3EA5 55%, #22D3EE 100%);
@@ -62,23 +45,19 @@ st.markdown(
         font-family: 'JetBrains Mono', monospace !important;
     }
 
-    /* Glassmorphic metric cards */
     [data-testid="stMetric"] {
-        background: rgba(255,255,255,0.045);
-        backdrop-filter: blur(14px);
+        background: #16101F;
         border: 1px solid rgba(255,255,255,0.09);
         border-radius: 16px;
         padding: 16px 18px;
-        box-shadow: 0 4px 24px rgba(139,92,246,0.10);
     }
     [data-testid="stMetricLabel"] { color: #9891A8 !important; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
     [data-testid="stMetricValue"] { color: #F5F3FF !important; }
 
-    /* Pill-shaped gradient tabs */
     .stTabs [data-baseweb="tab-list"] { gap: 6px; border-bottom: none; padding-bottom: 8px; }
     .stTabs [data-baseweb="tab"] {
         font-family: 'Unbounded', sans-serif; font-weight: 500; font-size: 0.82rem;
-        color: #9891A8; background: rgba(255,255,255,0.04);
+        color: #9891A8; background: #16101F;
         border-radius: 999px; padding: 10px 20px; border: 1px solid rgba(255,255,255,0.07);
     }
     .stTabs [aria-selected="true"] {
@@ -87,29 +66,24 @@ st.markdown(
         border: none !important; font-weight: 700;
     }
 
-    /* Gradient pill buttons with glow */
     .stButton>button {
         background: linear-gradient(90deg, #8B5CF6, #FF3EA5 60%, #22D3EE);
         color: #0B0710; font-weight: 700; font-family: 'Unbounded', sans-serif; font-size: 0.85rem;
         border: none; border-radius: 999px; padding: 0.6rem 1.4rem;
-        transition: box-shadow 0.25s ease, transform 0.2s ease;
     }
     .stButton>button:hover {
-        box-shadow: 0 0 24px rgba(255,62,165,0.5), 0 0 40px rgba(139,92,246,0.3);
-        transform: translateY(-2px);
+        box-shadow: 0 0 20px rgba(255,62,165,0.4);
     }
 
-    /* Glassmorphic containers for text areas / inputs */
     .stTextArea textarea, .stSelectbox [data-baseweb="select"], .stNumberInput input {
-        background: rgba(255,255,255,0.04) !important;
+        background: #16101F !important;
         border: 1px solid rgba(255,255,255,0.09) !important;
         color: #F5F3FF !important; border-radius: 10px !important;
     }
 
-    /* Ticker tape -- signature scroll, multi-color dots */
     .ticker-tape-wrap {
         overflow: hidden; white-space: nowrap;
-        border-radius: 999px; background: rgba(255,255,255,0.03);
+        border-radius: 999px; background: #16101F;
         border: 1px solid rgba(255,255,255,0.07);
         padding: 10px 0; margin-bottom: 1.4rem;
     }
