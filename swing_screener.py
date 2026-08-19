@@ -137,9 +137,15 @@ def get_current_price(ticker: str) -> dict:
     and always-on trading for crypto (tickers ending in -USD).
 
     Returns a dict with:
-        price       -- the most current price available
-        market_state -- 'REGULAR', 'PRE', 'POST', 'CLOSED', or 'CRYPTO'
-        error       -- set if the fetch failed
+        price        -- the most current price available
+        market_state -- 'REGULAR', 'PRE', 'POST', 'CRYPTO', or 'CLOSED (last close)'
+        error        -- set only if every fallback failed and price is None
+
+    Tries fast_info first (lighter, more reliable), then .info for pre/post
+    market refinement, then the last daily close -- so a single failed call
+    doesn't blank out the whole result the way relying on just one endpoint
+    would. Yahoo's .info endpoint in particular is prone to failing or being
+    rate-limited; fast_info is a lighter, more dependable baseline.
 
     IMPORTANT: pre-market/after-hours prices reflect thin, less reliable
     trading volume compared to regular session prices -- treat them as
@@ -152,17 +158,28 @@ def get_current_price(ticker: str) -> dict:
 
     ticker = ticker.strip().upper()
     is_crypto = ticker.endswith("-USD")
+    baseline_price = None
+    last_error = None
 
+    # Layer 1: fast_info -- lighter call, most reliable baseline
     try:
         t = yf.Ticker(ticker)
-        info = t.info or {}
+        fi = t.fast_info
+        baseline_price = fi.get("lastPrice") or fi.get("last_price")
+        if baseline_price is not None:
+            baseline_price = float(baseline_price)
+    except Exception as e:
+        last_error = f"fast_info failed: {e}"
 
-        if is_crypto:
-            price = info.get("regularMarketPrice") or info.get("currentPrice")
-            if price is not None:
-                return {"price": float(price), "market_state": "CRYPTO", "error": None}
-        else:
-            state = info.get("marketState", "")  # e.g. 'PRE', 'REGULAR', 'POST', 'CLOSED'
+    if is_crypto:
+        if baseline_price is not None:
+            return {"price": baseline_price, "market_state": "CRYPTO", "error": None}
+        # fast_info failed for crypto -- fall through to the last-close fallback below
+    else:
+        # Layer 2: .info -- heavier call, but gives pre/post-market granularity
+        try:
+            info = yf.Ticker(ticker).info or {}
+            state = info.get("marketState", "")
             post_price = info.get("postMarketPrice")
             pre_price = info.get("preMarketPrice")
             regular_price = info.get("regularMarketPrice") or info.get("currentPrice")
@@ -173,15 +190,22 @@ def get_current_price(ticker: str) -> dict:
                 return {"price": float(pre_price), "market_state": "PRE", "error": None}
             if regular_price is not None:
                 return {"price": float(regular_price), "market_state": state or "REGULAR", "error": None}
+        except Exception as e:
+            last_error = f".info failed: {e}"
 
-        # fallback: most recent daily close if nothing above worked
+        # Layer 2 didn't return -- fall back to the fast_info baseline if we have one
+        if baseline_price is not None:
+            return {"price": baseline_price, "market_state": "REGULAR (approx)", "error": None}
+
+    # Final fallback for both crypto and stocks: most recent daily close
+    try:
         df = fetch_history(ticker, period="5d")
         if df is not None and not df.empty:
             return {"price": float(df["close"].iloc[-1]), "market_state": "CLOSED (last close)", "error": None}
-
-        return {"price": None, "market_state": None, "error": "no price data available"}
     except Exception as e:
-        return {"price": None, "market_state": None, "error": str(e)}
+        last_error = f"history fallback failed: {e}"
+
+    return {"price": None, "market_state": None, "error": last_error or "no price data available"}
 
 
 # ---------------------------------------------------------------------------
